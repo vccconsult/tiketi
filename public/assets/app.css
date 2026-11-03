@@ -1,0 +1,44 @@
+/* Additions for views, companies and transfers */
+.stack{display:flex;flex-direction:column;gap:18px}
+.views{display:flex;gap:4px;border-bottom:1px solid var(--line);overflow-x:auto}
+.views button{border:0;border-radius:8px 8px 0 0;background:transparent;padding:10px 16px;font-size:15px;font-weight:600;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-1px;white-space:nowrap;display:inline-flex;align-items:center;gap:8px}
+.views button:hover{color:var(--fg)}
+.views button.on{color:var(--fg);border-bottom-color:var(--accent)}
+.vc{font-size:12px;font-weight:600;background:var(--surface-2);color:var(--muted);border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums}
+.views button.on .vc{background:var(--accent);color:var(--accent-fg)}
+.subbar{display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface);max-width:100%;overflow-x:auto}
+.seg button{border:0;border-radius:0;padding:7px 14px;font-size:13.5px;background:transparent;white-space:nowrap}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button.on{background:var(--accent);color:var(--accent-fg)}
+.bar button.primary{flex:none}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+.cname{font-weight:600}
+.unas{color:var(--work);font-weight:600;font-size:12.5px}
+.chip.unasg .av{background:var(--work)!important}
+
+/* company info card inside ticket */
+.cinfo{background:var(--surface-2);border-radius:8px;padding:10px 12px;font-size:13px;display:grid;grid-template-columns:auto 1fr;gap:3px 12px}
+.cinfo dt{color:var(--muted)}
+.cinfo dd{margin:0;overflow-wrap:anywhere}
+
+/* assignment block */
+.asg{border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.asg .row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.asg .cur{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600}
+.asg .cur .av{width:28px;height:28px;font-size:12px}
+.asg .btns{display:flex;gap:8px;flex-wrap:wrap}
+.asg .lab{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.trf{display:flex;flex-direction:column;gap:8px;border-top:1px dashed var(--line);padding-top:10px}
+.trf textarea{min-height:60px}
+.ev .reason{font-size:13px;color:var(--muted);font-style:italic}
+
+/* company drawer ticket list */
+.ctl{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.ctl button{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;text-align:left;border:0;border-radius:0;border-bottom:1px solid var(--line);padding:9px 12px;background:var(--surface)}
+.ctl button:last-child{border-bottom:0}
+.ctl button:hover{background:var(--surface-2)}
+.ctl .ttl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+@media (max-width:760px){.g3{grid-template-columns:1fr}}
+.bar #cq{flex:1 1 240px}

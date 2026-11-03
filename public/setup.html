@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Първоначална настройка · Сервизни тикети</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/assets/auth.css?v=2">
+</head>
+<body>
+<main class="card">
+  <div class="brand"><div class="mark">ТК</div><div><h1>Първоначална настройка</h1><div class="sub">Сервизни тикети</div></div></div>
+  <div class="sub">Създайте администратора. После от бутона „Екип“ той добавя останалите потребители.</div>
+  <div id="msg" hidden></div>
+  <form id="f">
+    <label>Код за настройка<input id="code" autocomplete="off" required placeholder="стойността на SETUP_CODE от Cloudflare"></label>
+    <label>Вашето име<input id="name" required placeholder="Напр. Велислав Станков"></label>
+    <label>Потребителско име<input id="username" value="admin" autocapitalize="none" required></label>
+    <label>Парола (поне 8 знака)<span class="pw"><input id="password" type="password" autocomplete="new-password" required><button type="button">Покажи</button></span></label>
+    <label>Повторете паролата<span class="pw"><input id="password2" type="password" autocomplete="new-password" required><button type="button">Покажи</button></span></label>
+    <button type="submit" id="go">Създай администратора</button>
+  </form>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const msg=(t,cls)=>{const m=$('msg');m.hidden=!t;m.className=cls||'err';m.textContent=t||''};
+document.querySelectorAll('.pw button').forEach(b=>b.addEventListener('click',()=>{const i=b.previousElementSibling;const s=i.type==='password';i.type=s?'text':'password';b.textContent=s?'Скрий':'Покажи'}));
+fetch('/api/setup-status').then(r=>r.json()).then(s=>{
+  if(!s.needed){location.href='/login';return}
+  if(!s.codeConfigured)msg('Първо задайте SETUP_CODE в Cloudflare: проектът → Settings → Variables and Secrets → Add. После направете нов deploy и презаредете тази страница.');
+}).catch(()=>msg('Няма връзка със сървъра или базата D1 не е свързана.'));
+$('f').addEventListener('submit',async e=>{
+  e.preventDefault();
+  if($('password').value!==$('password2').value){msg('Двете пароли не съвпадат.');return}
+  $('go').disabled=true;
+  try{
+    const r=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json','X-Tiketi':'1'},credentials:'same-origin',
+      body:JSON.stringify({code:$('code').value.trim(),name:$('name').value,username:$('username').value,password:$('password').value})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){location.href='/';return}
+    msg(j.error||'Настройката не успя.');
+  }catch(err){msg('Няма връзка със сървъра.')}
+  $('go').disabled=false;
+});
+</script>
+</body>
+</html>

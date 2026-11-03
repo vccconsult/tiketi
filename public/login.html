@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вход · Сервизни тикети</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/assets/auth.css?v=2">
+</head>
+<body>
+<main class="card">
+  <div class="brand"><div class="mark">ТК</div><div><h1>Вход</h1><div class="sub">Сервизни тикети</div></div></div>
+  <div id="msg" hidden></div>
+  <form id="f" autocomplete="on">
+    <label>Потребителско име
+      <input id="username" name="username" autocomplete="username" autocapitalize="none" required autofocus>
+    </label>
+    <label>Парола
+      <span class="pw"><input id="password" name="password" type="password" autocomplete="current-password" required><button type="button" aria-label="Покажи паролата">Покажи</button></span>
+    </label>
+    <button type="submit" id="go">Влез</button>
+  </form>
+  <div class="foot">Нямате профил или сте забравили паролата? Обърнете се към администратора.</div>
+</main>
+<script>
+const msg=(t,cls)=>{const m=document.getElementById('msg');m.hidden=!t;m.className=cls||'err';m.textContent=t||''};
+const qs=new URLSearchParams(location.search);
+if(qs.has('out'))msg('Излязохте успешно.','ok');
+if(qs.has('expired'))msg('Сесията изтече. Влезте отново.');
+if(qs.has('ready'))msg('Администраторът е създаден. Влезте с него.','ok');
+document.querySelectorAll('.pw button').forEach(b=>b.addEventListener('click',()=>{const i=b.previousElementSibling;const s=i.type==='password';i.type=s?'text':'password';b.textContent=s?'Скрий':'Покажи'}));
+document.getElementById('f').addEventListener('submit',async e=>{
+  e.preventDefault();const go=document.getElementById('go');go.disabled=true;
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json','X-Tiketi':'1'},credentials:'same-origin',
+      body:JSON.stringify({username:document.getElementById('username').value,password:document.getElementById('password').value})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){location.href='/';return}
+    msg(j.error||'Входът не успя.');
+  }catch(err){msg('Няма връзка със сървъра.')}
+  go.disabled=false;
+});
+fetch('/api/setup-status').then(r=>r.json()).then(s=>{if(s.needed)location.href='/setup'}).catch(()=>{});
+</script>
+</body>
+</html>
