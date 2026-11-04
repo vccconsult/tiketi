@@ -1,4 +1,4 @@
-import { sessionUser, userCount, json } from "../lib/server.js";
+import { sessionUser, userCount, json, migrateOnce } from "../lib/server.js";
 
 // Страници и адреси, достъпни без вход
 const PUBLIC = [/^\/login(\.html)?$/, /^\/setup(\.html)?$/, /^\/assets\//, /^\/api\/(login|setup|setup-status)$/, /^\/favicon\.ico$/];
@@ -11,6 +11,7 @@ export async function onRequest(context) {
     return new Response("Липсва връзка с базата D1. В Cloudflare: Settings → Bindings → Add → D1 database, с име на променливата DB. После направете нов deploy.", { status: 500, headers: { "Content-Type": "text/plain; charset=utf-8" } });
   }
 
+  await migrateOnce(env);
   if (PUBLIC.some(r => r.test(path))) return withSecurityHeaders(await next());
 
   const user = await sessionUser(request, env);

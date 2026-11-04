@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Сервизни тикети</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/assets/style.css?v=3">
-<link rel="stylesheet" href="/assets/app.css?v=3">
+<link rel="stylesheet" href="/assets/style.css?v=4">
+<link rel="stylesheet" href="/assets/app.css?v=4">
 </head>
 <body>
 <div class="wrap">
@@ -18,6 +18,7 @@
     <div class="actions">
       <button type="button" class="meBox" id="meBox" title="Моят профил"></button>
       <button id="btnHist" type="button">История</button>
+      <button id="btnDepts" type="button">Отдели</button>
       <button id="btnUsers" type="button">Екип</button>
       <a id="btnExport" class="btnlink" href="/api/export">Експорт за Excel</a>
       <button id="btnNew" type="button" class="primary">+ Нов тикет</button>
@@ -35,11 +36,6 @@
   <!-- TICKETS VIEW -->
   <section id="ticketsView" class="stack">
     <div class="subbar">
-      <div class="seg" id="segMine" role="group" aria-label="Кои мои тикети">
-        <button type="button" data-mine="both" class="on">Всички мои</button>
-        <button type="button" data-mine="assigned">Възложени на мен</button>
-        <button type="button" data-mine="reported">Подадени от мен</button>
-      </div>
       <div class="seg" id="segOpen" role="group" aria-label="Отворени или затворени">
         <button type="button" data-open="open" class="on">Отворени</button>
         <button type="button" data-open="closed">Затворени</button>
@@ -52,6 +48,7 @@
 
     <div class="bar">
       <input id="q" type="search" placeholder="Търси по №, заглавие, описание, компания или обект…" aria-label="Търсене">
+      <select id="fDept" aria-label="Отдел"></select>
       <select id="fComp" aria-label="Компания"></select>
       <select id="fPrio" aria-label="Приоритет"></select>
       <select id="fCat" aria-label="Категория"></select>
@@ -93,6 +90,6 @@
 <div id="scrim" class="scrim" hidden></div>
 <aside id="drawer" class="drawer" hidden aria-modal="true" role="dialog"></aside>
 <div id="toast" class="toast" hidden></div>
-<script src="/assets/app.js?v=3"></script>
+<script src="/assets/app.js?v=4"></script>
 </body>
 </html>
