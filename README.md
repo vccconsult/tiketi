@@ -69,3 +69,5 @@ lib/server.js      общ код: пароли, сесии, структура �
 Ако не: в Cloudflare *D1 → tiketi-db → Console* изпълнете
 `UPDATE users SET role='admin' WHERE username='<друг потребител>';`
 и влезте с него.
+
+Отдели
