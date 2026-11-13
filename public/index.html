@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Сервизни тикети</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/assets/style.css?v=25">
+<link rel="stylesheet" href="/assets/app.css?v=25">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Сервизни тикети</h1>
+      <div class="sub" id="sub">Зареждане на данните…</div>
+    </div>
+    <div class="actions">
+      <button type="button" class="bell" id="btnBell" aria-label="Известия" aria-expanded="false">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-1.7 1.7A1 1 0 0 0 4 19.4h16a1 1 0 0 0 .7-1.7Z"/></svg>
+        <span class="bellN" id="bellN" hidden></span>
+      </button>
+      <button type="button" class="meBox" id="meBox" title="Моят профил"></button>
+      <button id="btnHist" type="button">История</button>
+      <button id="btnDepts" type="button">Отдели</button>
+      <button id="btnUsers" type="button">Екип</button>
+      <a id="btnExport" class="btnlink" href="/api/export">Експорт за Excel</a>
+      <button id="btnImport" type="button" hidden>Импорт от Excel</button>
+      <button id="btnNew" type="button" class="primary">+ Нов тикет</button>
+    </div>
+  </header>
+
+  <nav class="views" id="views" aria-label="Изгледи">
+    <button type="button" data-view="mine">Моите тикети <span class="vc" id="vcMine"></span></button>
+    <button type="button" data-view="all">Общи тикети <span class="vc" id="vcAll"></span></button>
+    <button type="button" data-view="repairs" id="tabRep" hidden>Ремонти <span class="vc" id="vcRep"></span></button>
+    <button type="button" data-view="companies">Компании <span class="vc" id="vcComp"></span></button>
+  </nav>
+
+  <div id="warn" class="warn" hidden></div>
+
+  <!-- TICKETS VIEW -->
+  <section id="ticketsView" class="stack">
+    <div class="subbar">
+      <div class="seg" id="segOpen" role="group" aria-label="Отворени или затворени">
+        <button type="button" data-open="open" class="on">Отворени</button>
+        <button type="button" data-open="closed">Затворени</button>
+        <button type="button" data-open="any">Всички</button>
+      </div>
+    </div>
+
+    <div class="whs" id="whs" hidden></div>
+    <div class="stats" id="stats"></div>
+    <div class="team" id="team"></div>
+
+    <div class="bar">
+      <input id="q" type="search" placeholder="Търси по №, заглавие, описание, компания или обект…" aria-label="Търсене">
+      <select id="fDept" aria-label="Отдел"></select>
+      <select id="fComp" aria-label="Компания"></select>
+      <select id="fPrio" aria-label="Приоритет"></select>
+      <select id="fCat" aria-label="Категория"></select>
+      <select id="fSort" aria-label="Подреждане">
+        <option value="new">Най-нови първо</option>
+        <option value="old">Най-стари първо</option>
+        <option value="prio">По приоритет</option>
+        <option value="upd">Последно обновени</option>
+      </select>
+    </div>
+
+    <div class="tablebox">
+      <table>
+        <thead id="thead"></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="empty" hidden></div>
+    </div>
+  </section>
+
+  <!-- COMPANIES VIEW -->
+  <section id="companiesView" class="stack" hidden>
+    <div class="bar">
+      <input id="cq" type="search" placeholder="Търси компания по име, ЕИК, град, лице за контакт или телефон…" aria-label="Търсене на компания">
+      <button type="button" class="primary" id="btnNewComp">+ Нова компания</button>
+    </div>
+    <div class="tablebox">
+      <table>
+        <thead><tr><th>Компания</th><th>Лице за контакт</th><th>Телефон</th><th>ЕИК</th><th class="num">Отворени</th><th class="num">Всички</th></tr></thead>
+        <tbody id="crows"></tbody>
+      </table>
+      <div id="cempty" class="empty" hidden></div>
+    </div>
+  </section>
+
+  <div class="note">Данните се обновяват автоматично на всеки 30 секунди.</div>
+</div>
+
+<div id="bellPanel" class="bellpanel" hidden role="dialog" aria-label="Известия"></div>
+<div id="scrim" class="scrim" hidden></div>
+<aside id="drawer" class="drawer" hidden aria-modal="true" role="dialog"></aside>
+<div id="toast" class="toast" hidden></div>
+<script src="/assets/app.js?v=25"></script>
+</body>
+</html>
