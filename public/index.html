@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Сервизни тикети</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/assets/style.css?v=25">
-<link rel="stylesheet" href="/assets/app.css?v=25">
+<link rel="stylesheet" href="/assets/style.css?v=27">
+<link rel="stylesheet" href="/assets/app.css?v=27">
 </head>
 <body>
 <div class="wrap">
@@ -35,6 +35,7 @@
     <button type="button" data-view="all">Общи тикети <span class="vc" id="vcAll"></span></button>
     <button type="button" data-view="repairs" id="tabRep" hidden>Ремонти <span class="vc" id="vcRep"></span></button>
     <button type="button" data-view="companies">Компании <span class="vc" id="vcComp"></span></button>
+    <button type="button" data-view="calendar">Календар <span class="vc warnc" id="vcCal"></span></button>
   </nav>
 
   <div id="warn" class="warn" hidden></div>
@@ -91,6 +92,23 @@
     </div>
   </section>
 
+  <!-- CALENDAR VIEW -->
+  <section id="calView" class="stack" hidden>
+    <div id="calPending"></div>
+    <div class="calbar">
+      <div class="calnav">
+        <button type="button" id="calPrev" aria-label="Предишен месец">‹</button>
+        <h2 id="calTitle"></h2>
+        <button type="button" id="calNext" aria-label="Следващ месец">›</button>
+        <button type="button" id="calToday">Днес</button>
+      </div>
+      <select id="calUser" aria-label="Чий календар"></select>
+    </div>
+    <div class="callegend" id="calLegend"></div>
+    <div class="calwrap"><div class="calgrid" id="calGrid"></div></div>
+    <div id="calMine"></div>
+  </section>
+
   <div class="note">Данните се обновяват автоматично на всеки 30 секунди.</div>
 </div>
 
@@ -98,6 +116,6 @@
 <div id="scrim" class="scrim" hidden></div>
 <aside id="drawer" class="drawer" hidden aria-modal="true" role="dialog"></aside>
 <div id="toast" class="toast" hidden></div>
-<script src="/assets/app.js?v=25"></script>
+<script src="/assets/app.js?v=27"></script>
 </body>
 </html>

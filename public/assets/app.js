@@ -11,9 +11,11 @@ const REPAIR_STATUSES=[
   {k:"s3300",code:"3300",l:"Ремонтирано към клиента",mv:"-SW",c:"--st-green"},
   {k:"s1401",code:"1401",l:"Връщане от Риека към гл. склад",mv:"+MW",c:"--st-green"},
   {k:"s3301",code:"3301",l:"Ново/заместващо към клиента",mv:"-MW",c:"--st-cyan"}];
+// Заявки за отпуска (тикети към отдел „Управител“)
+const LEAVE_STATUSES=[{k:"lv_wait",l:"Изчаква одобрение",c:"--st-orange"},{k:"lv_ok",l:"Одобрена",c:"--st-green"},{k:"lv_no",l:"Отказана",c:"--st-red"},{k:"lv_cancel",l:"Отменена",c:"--st-grey"}];
 const LEGACY=[{k:"closed",l:"Затворен",c:"--st-grey"},{k:"received",l:"Прието",c:"--st-grey"},{k:"processed",l:"Обработено",c:"--st-grey"},{k:"sent",l:"Пратено на Риека",c:"--st-grey"},{k:"returned",l:"Върнато от Риека",c:"--st-grey"},{k:"stocked",l:"Заведено в склада",c:"--st-grey"}];
-const STATUSES=[...STD_STATUSES,...REPAIR_STATUSES,...LEGACY];
-const CLOSED=new Set(["done","closed","s3300","s1401","stocked"]);
+const STATUSES=[...STD_STATUSES,...REPAIR_STATUSES,...LEAVE_STATUSES,...LEGACY];
+const CLOSED=new Set(["done","closed","s3300","s1401","stocked","lv_ok","lv_no","lv_cancel"]);
 // Процедура: със замяна 1300 → 3301 → 3400 → 1401; без замяна 1300 → 3400 → 1400 → 3300
 const REPAIR_PATH={yes:["s0","s1300","s3301","s3400","s1401"],no:["s0","s1300","s3400","s1400","s3300"]};
 const DELTA={s0:{},s1300:{sw:1},s3400:{sw:-1},s1400:{sw:1},s3300:{sw:-1},s1401:{mw:1},s3301:{mw:-1}};
@@ -36,6 +38,44 @@ function waitHtml(t){
 }
 // Колко дни е при Риека
 const todayStr=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
+/* ---------- дати във формат ден.месец.година (може и с поставяне отвсякъде) ---------- */
+const isoToBg=v=>{const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(v||"");return m?`${m[3]}.${m[2]}.${m[1]}`:""};
+function bgToIso(raw){
+  let v=String(raw||"").trim().replace(/\s*(г\.?|год\.?|ч\..*)$/i,"").replace(/\s+\d{1,2}:\d{2}(:\d{2})?$/,"").trim();
+  if(!v)return "";
+  let y,mo,d,m;
+  if((m=/^(\d{4})[-./](\d{1,2})[-./](\d{1,2})/.exec(v)))[y,mo,d]=[+m[1],+m[2],+m[3]];
+  else if((m=/^(\d{1,2})\s*[-./,\\ ]\s*(\d{1,2})\s*[-./,\\ ]\s*(\d{2}|\d{4})$/.exec(v)))[d,mo,y]=[+m[1],+m[2],+m[3]];
+  else if((m=/^(\d{2})(\d{2})(\d{4})$/.exec(v)))[d,mo,y]=[+m[1],+m[2],+m[3]];
+  else if((m=/^(\d{2})(\d{2})(\d{2})$/.exec(v)))[d,mo,y]=[+m[1],+m[2],+m[3]];
+  else if(/^\d{5}$/.test(v)){const t=new Date(Date.UTC(1899,11,30)+(+v)*864e5);return t.toISOString().slice(0,10)} // сериен номер от Excel
+  else return null;
+  if(y<100)y+=2000;
+  const t=new Date(Date.UTC(y,mo-1,d));
+  if(t.getUTCFullYear()!==y||t.getUTCMonth()!==mo-1||t.getUTCDate()!==d)return null;
+  return t.toISOString().slice(0,10);
+}
+const CAL='<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1Zm13 8H4v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9Z"/></svg>';
+const dateIn=(id,iso,max)=>`<span class="dt"><input id="${id}" class="dtin" type="text" inputmode="numeric" autocomplete="off" placeholder="дд.мм.гггг" value="${esc(isoToBg(iso))}" data-max="${esc(max||"")}"><button type="button" class="dtpick" tabindex="-1" aria-label="Избор от календар" title="Календар">${CAL}</button><input type="date" class="dtnative" tabindex="-1" aria-hidden="true" ${max?`max="${esc(max)}"`:""}></span>`;
+// чете полето като ГГГГ-ММ-ДД; при грешна дата показва съобщение и връща null
+function dval(sel,label){
+  const el=$(sel);if(!el)return "";
+  const iso=bgToIso(el.value);
+  if(iso===null){el.classList.add("bad");el.focus();toast(`${label||"Датата"}: напишете я като ден.месец.година, напр. 25.03.2025`);return null}
+  if(iso&&el.dataset.max&&iso>el.dataset.max){el.classList.add("bad");el.focus();toast(`${label||"Датата"} не може да е в бъдещето.`);return null}
+  el.classList.remove("bad");return iso;
+}
+const dset=(sel,iso)=>{const el=$(sel);if(el){el.value=isoToBg(iso);el.classList.remove("bad")}};
+const dtNorm=el=>{const iso=bgToIso(el.value);el.classList.toggle("bad",iso===null);if(iso)el.value=isoToBg(iso)};
+document.addEventListener("focusout",e=>{if(e.target.classList&&e.target.classList.contains("dtin"))dtNorm(e.target)});
+document.addEventListener("paste",e=>{const el=e.target;if(!el.classList||!el.classList.contains("dtin"))return;
+  const txt=(e.clipboardData||window.clipboardData).getData("text").trim();const iso=bgToIso(txt);
+  if(iso){e.preventDefault();el.value=isoToBg(iso);el.classList.remove("bad");el.dispatchEvent(new Event("input",{bubbles:true}))}});
+document.addEventListener("input",e=>{if(e.target.classList&&e.target.classList.contains("dtin"))e.target.classList.remove("bad")});
+document.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest(".dtpick");if(!b)return;
+  const box=b.parentElement,nat=box.querySelector(".dtnative"),txt=box.querySelector(".dtin");nat.value=bgToIso(txt.value)||"";
+  try{nat.showPicker()}catch{nat.focus();nat.click()}});
+document.addEventListener("change",e=>{if(e.target.classList&&e.target.classList.contains("dtnative")){const txt=e.target.parentElement.querySelector(".dtin");txt.value=isoToBg(e.target.value);txt.classList.remove("bad");txt.dispatchEvent(new Event("input",{bubbles:true}))}});
 const daysSince=d=>Math.max(0,Math.round((new Date(todayStr())-new Date(d))/864e5));
 const daysTxt=n=>n===0?"днес":n===1?"преди 1 ден":`преди ${n} дни`;
 function sentLine(t){
@@ -55,9 +95,9 @@ const balChip=(name,v,always)=>(v||always)?`<span class="bal ${v<0?"neg":v>0?"po
 const PRIOS=[{k:4,l:"Спешен",c:"--crit"},{k:3,l:"Висок",c:"--work"},{k:2,l:"Среден",c:"--new"},{k:1,l:"Нисък",c:"--st-grey"}];
 const AVC=["#0d5c7a","#a0522d","#5b6b2f","#7a3d8c","#2f5f9e","#8a5a00","#3d6b6b"];
 
-let notifs=[], seenNotif=null, emailOn=false, me={id:"",name:"",isAdmin:false}, users=[], companies=[], tickets=[], departments=[], loaded=false, maxUsers=7;
+let absences=[], notifs=[], seenNotif=null, emailOn=false, me={id:"",name:"",isAdmin:false}, users=[], companies=[], tickets=[], departments=[], loaded=false, maxUsers=7;
 const ui={view:"mine",open:"open",status:"",user:"",stock:"",openId:null};
-try{const v=localStorage.getItem("tk_view");if(["mine","all","repairs","companies"].includes(v))ui.view=v}catch(e){}
+try{const v=localStorage.getItem("tk_view");if(["mine","all","repairs","companies","calendar"].includes(v))ui.view=v}catch(e){}
 
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -101,10 +141,11 @@ function refresh(){ refreshing ||= doRefresh().finally(()=>refreshing=null); ret
 async function doRefresh(){
   try{
     if(cursor){
-      const q=new URLSearchParams({log:cursor.log,tomb:cursor.tomb,notif:cursor.notif,cfg:cursor.cfg});
+      const q=new URLSearchParams({log:cursor.log,tomb:cursor.tomb,notif:cursor.notif,cfg:cursor.cfg,abs:cursor.abs||"0"});
       const d=await api("sync?"+q);
       if(!d.full){
         let changed=!!d.users;applyCfg(d);
+        if(d.absences){absences=d.absences;changed=true}
         if(d.deleted&&d.deleted.length){const del=new Set(d.deleted);tickets=tickets.filter(t=>!del.has(t.id));changed=true}
         for(const t of d.tickets||[]){const i=tickets.findIndex(x=>x.id===t.id);if(i>=0)tickets[i]=t;else tickets.push(t);changed=true}
         if(d.notifications&&d.notifications.length){const have=new Set(notifs.map(n=>n.id));notifs=[...d.notifications.filter(n=>!have.has(n.id)),...notifs].slice(0,50);changed=true}
@@ -114,7 +155,7 @@ async function doRefresh(){
       }
     }
     const s=await api("state");
-    applyCfg(s);tickets=s.tickets;notifs=s.notifications||[];cursor=s.cursor;loaded=true;$("#warn").hidden=true;
+    applyCfg(s);tickets=s.tickets;absences=s.absences||[];notifs=s.notifications||[];cursor=s.cursor;loaded=true;$("#warn").hidden=true;
     announce();render();renderBell();
   }catch(e){const w=$("#warn");w.hidden=false;w.textContent=/лимит/.test(e.message)?e.message:"Няма връзка със сървъра: "+e.message}
 }
@@ -150,13 +191,16 @@ function render(){
   const hasRep=repairDepts().length||tickets.some(t=>t.kind==="repair");
   $("#tabRep").hidden=!hasRep; if(!hasRep&&ui.view==="repairs")ui.view="all";
   $("#vcRep").textContent=loaded?openAll.filter(t=>t.kind==="repair").length:"";
-  $("#btnNew").textContent=ui.view==="repairs"?"+ Нов ремонт":"+ Нов тикет";
+  $("#btnNew").textContent=ui.view==="repairs"?"+ Нов ремонт":ui.view==="calendar"?"+ Отсъствие":"+ Нов тикет";
+  const pend=absences.filter(a=>a.status==="pending");
+  $("#vcCal").textContent=loaded&&isApprover()&&pend.length?pend.length:"";
   $("#btnImport").hidden=!(me.isAdmin&&ui.view==="repairs");
   document.querySelectorAll("#views [data-view]").forEach(b=>b.classList.toggle("on",b.dataset.view===ui.view));
   $("#btnExport").hidden=!tickets.length;
-  const isComp=ui.view==="companies";
-  $("#ticketsView").hidden=isComp;$("#companiesView").hidden=!isComp;
+  const isComp=ui.view==="companies",isCal=ui.view==="calendar";
+  $("#ticketsView").hidden=isComp||isCal;$("#companiesView").hidden=!isComp;$("#calView").hidden=!isCal;
   if(isComp){renderCompanies();return}
+  if(isCal){renderCalendar();return}
 
   document.querySelectorAll("#segOpen [data-open]").forEach(b=>b.classList.toggle("on",b.dataset.open===ui.open));
 
@@ -195,7 +239,7 @@ function render(){
     const inD=x=>!fdv||x.department===fdv;
     t.innerHTML=`<span class="lab">Отворени по отговорник</span>`
       +`<span class="chip unasg ${ui.user==="none"?"on":""}" role="button" tabindex="0" data-u="none"><span class="av">?</span>Неразпределени <span class="c">${openAll.filter(x=>!x.assignee&&inD(x)).length}</span></span>`
-      +ord.map(u=>`<span class="chip ${ui.user===u.id?"on":""}" role="button" tabindex="0" data-u="${esc(u.id)}">${av(u.id)}${u.id===me.id?"Аз":esc(u.name)} <span class="c">${openAll.filter(x=>x.assignee===u.id).length}</span></span>`).join("");
+      +ord.map(u=>`<span class="chip ${ui.user===u.id?"on":""}" role="button" tabindex="0" data-u="${esc(u.id)}">${av(u.id)}${u.id===me.id?"Аз":esc(u.name)}${(()=>{const a=awayOn(u.id,todayStr());return a?` <span class="away" style="--ac:var(${atype(a.type).c})">${esc(atype(a.type).s)}</span>`:""})()} <span class="c">${openAll.filter(x=>x.assignee===u.id).length}</span></span>`).join("");
   }else t.hidden=true;
 
   // company filter options (kept in sync)
@@ -421,7 +465,7 @@ function ticketForm(t,preset){
         <label class="f"><span>Сериен номер <span class="req">*</span></span><input id="r_serial" class="mono" maxlength="80" value="${esc(t.serial||"")}" autocapitalize="characters" spellcheck="false"></label>
       </div>
       <div class="g2">
-        <label class="f">Дата по фактура<input id="r_invdate" type="date" value="${esc(t.invoiceDate||"")}" max="${new Date().toISOString().slice(0,10)}"></label>
+        <label class="f">Дата по фактура${dateIn("r_invdate",t.invoiceDate,todayStr())}</label>
       </div>
       <label class="f"><span>Повреда <span class="req">*</span></span><textarea id="r_fault" placeholder="Какво не работи, как се проявява, кога е започнало…">${esc(kind==="repair"?t.description||"":"")}</textarea></label>
       <div class="g2">
@@ -432,7 +476,7 @@ function ticketForm(t,preset){
       ${locked&&t.status==="s3400"?`<div class="sentbox">
         <div class="sb-h">Изпратено към Риека</div>
         <div class="sb-row"><span class="sb-big">${t.sentDate?bgd(t.sentDate):"—"}</span>${t.sentDate?`<span class="sb-days ${daysSince(t.sentDate)>=30?"late":""}">${daysTxt(daysSince(t.sentDate))}</span>`:""}${curDoc(t)?`<span class="note">документ № <span class="mono">${esc(curDoc(t))}</span></span>`:""}</div>
-        <label class="f">Дата на изпращане<input type="date" id="r_sentedit" value="${esc(t.sentDate||"")}" max="${todayStr()}"></label>
+        <label class="f">Дата на изпращане${dateIn("r_sentedit",t.sentDate,todayStr())}</label>
         <div class="note">Чака връщане от Риека. Поправката на датата се записва с „Запази промените“.</div>
       </div>`:""}
       ${t.issued?`<div class="issued big">✓ Ново/заместващо у-во изписано към клиента · операция 3301 · документ № ${esc(t.issueDoc)}${t.newSerial?` · SN <span class="mono">${esc(t.newSerial)}</span>`:""}</div>`:""}
@@ -452,7 +496,7 @@ function ticketForm(t,preset){
     <div class="issue" id="r_op" hidden>
       <div class="g2">
         <label class="f"><span id="r_sdoc_lab">Документ №</span><input id="r_sdoc" class="mono" maxlength="60" placeholder="Номер на складовия документ"></label>
-        <label class="f" id="r_sent_box" hidden>Дата на изпращане<input id="r_sentdate" type="date" max="${todayStr()}"></label>
+        <label class="f" id="r_sent_box" hidden>Дата на изпращане${dateIn("r_sentdate","",todayStr())}</label>
         <label class="f" id="r_nsn_box" hidden>Сериен № на новото у-во<input id="r_newserial" class="mono" maxlength="80" spellcheck="false"></label>
       </div>
     </div>
@@ -466,7 +510,7 @@ function openNew(preset){
   if(!preset.department&&ui.view==="repairs"){const r=repairDepts();if(r.length)preset.department=(r.find(d=>d.id===myDept())||r[0]).id}
   ui.openId=null;showDrawer(ticketForm(null,preset));bindForm(null);
 }
-function openTicket(id){const t=tickets.find(x=>x.id===String(id));if(!t)return;ui.openId=t.id;showDrawer(ticketForm(t));bindForm(t)}
+function openTicket(id){const t=tickets.find(x=>x.id===String(id));if(!t)return;ui.openId=t.id;if(t.kind==="leave"){openLeave(t);return}showDrawer(ticketForm(t));bindForm(t)}
 function bindForm(t){
   const isNew=!t;
   const kindNow=()=>$("#tf").dataset.kind;
@@ -489,7 +533,7 @@ function bindForm(t){
     const must=v==="s3301";
     $("#r_sdoc_lab").innerHTML=`Документ № за операция ${o.code} (${o.mv})${must?' <span class="req">*</span>':" – по желание"}`;
     $("#r_nsn_box").hidden=!must;
-    const sb=$("#r_sent_box");sb.hidden=v!=="s3400";if(v==="s3400"&&!$("#r_sentdate").value)$("#r_sentdate").value=todayStr();
+    const sb=$("#r_sent_box");sb.hidden=v!=="s3400";if(v==="s3400"&&!$("#r_sentdate").value)dset("#r_sentdate",todayStr());
   };
   syncOp();
   const ul=$("#r_unlock"); if(ul) ul.onclick=()=>{$("#r_sum").hidden=true;$("#r_intake").hidden=false;$("#r_product").focus()};
@@ -518,16 +562,19 @@ function bindForm(t){
     if(del.dataset.sure){deleteTicket(t)} else {del.dataset.sure="1";del.textContent="Потвърди изтриване";setTimeout(()=>{if(del.isConnected){del.textContent="Изтрий";delete del.dataset.sure}},4000)}
   };
 }
-$("#btnNew").onclick=()=>openNew();
+$("#btnNew").onclick=()=>ui.view==="calendar"?openAbsence():openNew();
 
 async function saveTicket(t){
   const kind=$("#tf").dataset.kind;
   const body={id:t?t.id:"",department:$("#t_dept").value,priority:Number($("#t_prio").value),status:$("#t_status").value};
   if(kind==="repair"){
+    const invD=dval("#r_invdate","Дата по фактура");if(invD===null)return;
+    const sentNew=!$("#r_op").hidden&&$("#t_status").value==="s3400";
+    const sentD=sentNew?dval("#r_sentdate","Дата на изпращане"):($("#r_sentedit")?dval("#r_sentedit","Дата на изпращане"):"");if(sentD===null)return;
     Object.assign(body,{company:$("#r_comp").value,clientName:$("#r_comp").value?"":$("#r_cname").value.trim(),product:$("#r_product").value.trim(),
-      serial:$("#r_serial").value.trim(),invoiceDate:$("#r_invdate").value,description:$("#r_fault").value.trim(),replaced:($("input[name=t_repl]:checked")||{}).value||"",
+      serial:$("#r_serial").value.trim(),invoiceDate:invD,description:$("#r_fault").value.trim(),replaced:($("input[name=t_repl]:checked")||{}).value||"",
       statusDoc:$("#r_op").hidden?"":$("#r_sdoc").value.trim(),
-      sentDate:!$("#r_op").hidden&&$("#t_status").value==="s3400"?$("#r_sentdate").value:($("#r_sentedit")?$("#r_sentedit").value:""),newSerial:$("#r_op").hidden?"":$("#r_newserial").value.trim()});
+      sentDate:sentD,newSerial:$("#r_op").hidden?"":$("#r_newserial").value.trim()});
     if(!body.company&&!body.clientName){toast("Изберете компания или напишете името на клиента.");return}
     if(!body.product||!body.serial){toast("Попълнете продукт и сериен номер.");return}
     if(!body.description){toast("Опишете повредата.");return}
@@ -644,7 +691,7 @@ function evHtml(ev,withTicket){
     case"take":act="пое тикета";body=(ev.from?`<div class="chg"><span class="old">${esc(uname(ev.from))}</span> → ${person(ev.to)}</div>`:"")+dmove;break;
     case"transfer":case"assign":act=ev.from?"прехвърли тикета":"насочи тикета";body=`<div class="chg">${ev.from?`<span class="who old">${esc(uname(ev.from))}</span> → `:""}${person(ev.to)}</div>${dmove}${reason}`;break;
     case"unassign":act=ev.toDept?"насочи тикета към отдел":"освободи тикета";body=`${ev.from?`<div class="chg"><span class="old">${esc(uname(ev.from))}</span> → ${ev.toDept?"отдел "+esc(ev.toDept):"свободен в отдела"}</div>`:""}${dmove}${reason}`;break;
-    case"status":act="смени статуса";body=`<div class="chg">${pill(ev.from)} → ${pill(ev.to)}</div>${ev.doc?`<div class="reason">Документ № <span class="mono">${esc(ev.doc)}</span>${ev.sn?` · нов SN <span class="mono">${esc(ev.sn)}</span>`:""}</div>`:""}${ev.sent?`<div class="reason">Изпратено на ${bgd(ev.sent)}</div>`:""}`;break;
+    case"status":act="смени статуса";body=`<div class="chg">${pill(ev.from)} → ${pill(ev.to)}</div>${ev.doc?`<div class="reason">Документ № <span class="mono">${esc(ev.doc)}</span>${ev.sn?` · нов SN <span class="mono">${esc(ev.sn)}</span>`:""}</div>`:""}${ev.sent?`<div class="reason">Изпратено на ${bgd(ev.sent)}</div>`:""}${reason}`;break;
     case"prio":act="смени приоритета";body=`<div class="chg">${prio(ev.from)} → ${prio(ev.to)}</div>`;break;
     case"edit":act="редактира "+(ev.fields||[]).map(f=>f.l.toLowerCase()).join(", ");
       body=(ev.fields||[]).map(f=>f.f==="description"
@@ -1018,11 +1065,212 @@ async function runImport(){
   toast(`Импортирани ${tot.created} ремонта.`);
 }
 
+/* ---------- календар: отпуски, болнични, командировки ---------- */
+// approval: заявката отива като тикет към отдел „Управител“ и чака одобрение
+const ATYPES=[
+  {k:"vacation",l:"Платена отпуска",s:"отпуска",c:"--st-green",approval:true},
+  {k:"unpaid",l:"Неплатена отпуска",s:"неплатена",c:"--st-cyan",approval:true},
+  {k:"sick",l:"Болничен",s:"болничен",c:"--st-red"},
+  {k:"dayoff",l:"Почивен ден",s:"почивен ден",c:"--lv-purple"},
+  {k:"trip",l:"Командировка",s:"командировка",c:"--st-blue"},
+  {k:"other",l:"Друго",s:"отсъства",c:"--st-grey"}];
+const atype=k=>ATYPES.find(x=>x.k===k)||ATYPES[ATYPES.length-1];
+const MGR_DEPT="Управител";
+const isApprover=()=>me.isAdmin||dname(myDept()).toLowerCase()===MGR_DEPT.toLowerCase();
+const AST={pending:"Изчаква одобрение",approved:"Одобрена",rejected:"Отказана",cancelled:"Отменена"};
+const ASTC={pending:"--st-orange",approved:"--st-green",rejected:"--st-red",cancelled:"--st-grey"};
+const MONTHS=["Януари","Февруари","Март","Април","Май","Юни","Юли","Август","Септември","Октомври","Ноември","Декември"];
+const WD=["Пн","Вт","Ср","Чт","Пт","Сб","Нд"];
+// Официални празници (както на сървъра): Великден по православния календар, пренасяне на почивните дни от събота/неделя
+const isoOf=d=>d.toISOString().slice(0,10),addDay=(d,n)=>new Date(d.getTime()+n*864e5);
+function easterOf(y){const a=y%4,b=y%7,c=y%19,d=(19*c+15)%30,e=(2*a+4*b-d+34)%7,m=Math.floor((d+e+114)/31),day=((d+e+114)%31)+1;return new Date(Date.UTC(y,m-1,day+13))}
+const HCACHE={};
+function holidays(y){
+  if(HCACHE[y])return HCACHE[y];
+  const fixed=[["01-01","Нова година"],["03-03","Освобождението"],["05-01","Ден на труда"],["05-06","Гергьовден"],["05-24","Ден на писмеността"],["09-06","Съединението"],["09-22","Независимостта"],["12-24","Бъдни вечер"],["12-25","Коледа"],["12-26","Коледа"]];
+  const h=new Map(fixed.map(([md,n])=>[`${y}-${md}`,n])),e=easterOf(y);
+  [[-2,"Велики петък"],[-1,"Велика събота"],[0,"Великден"],[1,"Великден"]].forEach(([k,n])=>h.set(isoOf(addDay(e,k)),n));
+  const wk=d=>{const w=d.getUTCDay();return w===0||w===6};
+  for(const [md,n] of fixed){const d=new Date(`${y}-${md}T00:00:00Z`);if(!wk(d))continue;let x=addDay(d,1);while(wk(x)||h.has(isoOf(x)))x=addDay(x,1);h.set(isoOf(x),n+" (почивен)")}
+  return HCACHE[y]=h;
+}
+const holidayName=iso=>holidays(+iso.slice(0,4)).get(iso)||"";
+const isWeekend=iso=>{const w=new Date(iso+"T00:00:00Z").getUTCDay();return w===0||w===6};
+const isWork=iso=>!isWeekend(iso)&&!holidayName(iso);
+function workDaysBetween(a,b){if(!a||!b||b<a)return 0;let n=0;for(let d=new Date(a+"T00:00:00Z"),e=new Date(b+"T00:00:00Z");d<=e;d=addDay(d,1))if(isWork(isoOf(d)))n++;return n}
+const period=a=>a.from===a.to?bgd(a.from):`${bgd(a.from)} – ${bgd(a.to)}`;
+const daysTxtW=n=>`${n} ${n===1?"работен ден":"работни дни"}`;
+const live=a=>a.status==="pending"||a.status==="approved";
+const awayOn=(uid,iso)=>absences.find(a=>a.user===uid&&a.status==="approved"&&a.from<=iso&&a.to>=iso);
+const shortName=id=>{const p=String(uname(id)).split(/\s+/);return p.length>1?`${p[0]} ${p[p.length-1][0]}.`:p[0]};
+const aPill=s=>`<span class="pill solid" style="background:var(${ASTC[s]||"--st-grey"})"><span class="dot"></span>${AST[s]||s}</span>`;
+const canCancel=a=>live(a)&&(a.user===me.id||a.by===me.id||isApprover());
+
+const cal={y:new Date().getFullYear(),m:new Date().getMonth()};
+$("#calPrev").onclick=()=>{cal.m--;if(cal.m<0){cal.m=11;cal.y--}renderCalendar()};
+$("#calNext").onclick=()=>{cal.m++;if(cal.m>11){cal.m=0;cal.y++}renderCalendar()};
+$("#calToday").onclick=()=>{const d=new Date();cal.y=d.getFullYear();cal.m=d.getMonth();renderCalendar()};
+$("#calUser").addEventListener("input",()=>renderCalendar());
+
+function renderCalendar(){
+  const cu=$("#calUser");
+  syncSelect(cu,`<option value="">Целият екип</option><option value="me">Само моите</option>`+team().map(u=>`<option value="${esc(u.id)}">${esc(u.name)}</option>`).join(""),v=>v==="me"||!!user(v));
+  const who=cu.value==="me"?me.id:cu.value;
+  $("#calTitle").textContent=`${MONTHS[cal.m]} ${cal.y}`;
+  $("#calLegend").innerHTML=ATYPES.map(t=>`<span class="lg"><i style="background:var(${t.c})"></i>${t.l}${t.approval?" *":""}</span>`).join("")
+    +`<span class="lg"><i class="hatch" style="--ac:var(--st-green)"></i>Изчаква одобрение</span><span class="lg"><i class="hol"></i>Празник</span><span class="note">* иска одобрение от отдел „${MGR_DEPT}“</span>`;
+
+  // за одобрение – само за управителите
+  const pend=absences.filter(a=>a.status==="pending").sort((a,b)=>a.from.localeCompare(b.from));
+  const pp=$("#calPending");
+  pp.innerHTML=isApprover()&&pend.length?`<div class="apanel warnp"><div class="aph"><b>Чакат вашето одобрение (${pend.length})</b><span class="note">Отпуските отиват като тикети към отдел „${MGR_DEPT}“.</span></div>
+    ${pend.map(a=>`<div class="arow">${av(a.user)}<div class="ainfo"><b>${esc(uname(a.user))}</b> · ${esc(atype(a.type).l)}<div>${period(a)} · <b>${daysTxtW(a.days)}</b>${a.note?` · <span class="note">„${esc(a.note)}“</span>`:""}</div>${clashTxt(a)}</div>
+      <div class="abtns"><button type="button" class="okb" data-dec="approve" data-a="${esc(a.id)}">Одобри</button><button type="button" class="nob" data-dec="reject" data-a="${esc(a.id)}">Откажи</button>${a.ticket?`<button type="button" data-tk="${esc(a.ticket)}">Отвори</button>`:""}</div></div>`).join("")}</div>`:"";
+
+  // месечна мрежа от понеделник до неделя
+  const first=new Date(Date.UTC(cal.y,cal.m,1)),last=new Date(Date.UTC(cal.y,cal.m+1,0));
+  let d=addDay(first,-((first.getUTCDay()+6)%7));const end=addDay(last,(7-last.getUTCDay())%7);
+  const today=todayStr(),list=absences.filter(a=>live(a)&&(!who||a.user===who));
+  let html=WD.map((w,i)=>`<div class="cwd ${i>4?"we":""}">${w}</div>`).join("");
+  for(;d<=end;d=addDay(d,1)){
+    const iso=isoOf(d),hn=holidayName(iso),out=d.getUTCMonth()!==cal.m,we=isWeekend(iso);
+    // на почивни дни показваме само отсъствия, които са изцяло в почивни дни (напр. командировка в събота)
+    const items=list.filter(a=>a.from<=iso&&a.to>=iso&&(isWork(iso)||!a.days)).sort((a,b)=>a.user.localeCompare(b.user));
+    html+=`<div class="cday ${out?"out":""} ${we?"we":""} ${hn?"hol":""} ${iso===today?"today":""}" data-day="${iso}">
+      <div class="cdn"><span>${d.getUTCDate()}</span>${hn?`<span class="hn" title="${esc(hn)}">${esc(hn)}</span>`:""}</div>
+      ${items.slice(0,4).map(a=>`<button type="button" class="ach ${a.status==="pending"?"pend":""}" style="--ac:var(${atype(a.type).c})" data-a="${esc(a.id)}" title="${esc(uname(a.user))} · ${esc(atype(a.type).l)} · ${period(a)}${a.status==="pending"?" · изчаква одобрение":""}"><span class="an">${esc(shortName(a.user))}</span><span class="at">${a.status==="pending"?"чака":esc(atype(a.type).s)}</span></button>`).join("")}
+      ${items.length>4?`<button type="button" class="amore" data-day="${iso}">+${items.length-4} още</button>`:""}</div>`;
+  }
+  $("#calGrid").innerHTML=html;
+
+  // моите заявки и използвани дни през годината
+  const y=String(cal.y),mine=absences.filter(a=>a.user===me.id).sort((a,b)=>b.from.localeCompare(a.from));
+  const used=t=>absences.filter(a=>a.user===me.id&&a.type===t&&a.status==="approved"&&a.from.startsWith(y)).reduce((s,a)=>s+a.days,0);
+  const pendDays=absences.filter(a=>a.user===me.id&&a.status==="pending"&&a.from.startsWith(y)).reduce((s,a)=>s+a.days,0);
+  $("#calMine").innerHTML=`<div class="apanel"><div class="aph"><b>Моите отсъствия</b><span class="note">През ${y}: платена отпуска <b>${used("vacation")}</b> дни${used("unpaid")?`, неплатена <b>${used("unpaid")}</b>`:""}${used("sick")?`, болничен <b>${used("sick")}</b>`:""}${pendDays?` · чакат одобрение <b>${pendDays}</b>`:""}</span></div>
+    ${mine.length?mine.slice(0,15).map(a=>`<div class="arow">${`<span class="tdot" style="background:var(${atype(a.type).c})"></span>`}<div class="ainfo"><b>${esc(atype(a.type).l)}</b> · ${period(a)}${a.days?` · ${daysTxtW(a.days)}`:""}${a.note?`<div class="note">„${esc(a.note)}“</div>`:""}${a.decisionNote?`<div class="note">${a.status==="rejected"?"Причина":"Коментар"}: „${esc(a.decisionNote)}“ – ${esc(uname(a.decidedBy))}</div>`:""}</div>
+      <div class="abtns">${a.ticket||atype(a.type).approval?aPill(a.status):""}${a.ticket&&tickets.some(t=>t.id===a.ticket)?`<button type="button" data-tk="${esc(a.ticket)}">Тикет</button>`:""}${canCancel(a)?`<button type="button" class="nob ghost" data-cancel="${esc(a.id)}">${a.ticket?"Отмени":"Премахни"}</button>`:""}</div></div>`).join("")
+      :`<div class="note">Нямате въведени отсъствия. Натиснете „+ Отсъствие“ или ден от календара.</div>`}</div>`;
+}
+// кой друг отсъства в същите дни – помага на управителя да реши
+function clashTxt(a){
+  const o=absences.filter(x=>x.id!==a.id&&x.user!==a.user&&live(x)&&x.from<=a.to&&x.to>=a.from);
+  return o.length?`<div class="clash">В същия период отсъстват: ${o.map(x=>`${esc(uname(x.user))} (${esc(atype(x.type).s)}${x.status==="pending"?", чака":""}, ${period(x)})`).join("; ")}</div>`:"";
+}
+$("#calView").addEventListener("click",async e=>{
+  const dec=e.target.closest("[data-dec]");if(dec){decide(dec.dataset.a,dec.dataset.dec,"",dec);return}
+  const tk=e.target.closest("[data-tk]");if(tk){openTicket(tk.dataset.tk);return}
+  const c=e.target.closest("[data-cancel]");if(c){cancelAbsence(c.dataset.cancel,c);return}
+  const ch=e.target.closest(".ach[data-a]");if(ch){openAbsenceInfo(ch.dataset.a);return}
+  const mo=e.target.closest(".amore");if(mo){openDay(mo.dataset.day);return}
+  const day=e.target.closest(".cday[data-day]");if(day)openAbsence({from:day.dataset.day});
+});
+async function decide(id,decision,note,btn){
+  if(btn)btn.disabled=true;
+  try{await api("absences/decide",{id,decision,note});await refresh();toast(decision==="approve"?"Отпуската е одобрена":"Отпуската е отказана");if(!$("#drawer").hidden&&ui.openId){const t=tickets.find(x=>x.id===ui.openId);if(t&&t.kind==="leave")openLeave(t)}}
+  catch(err){if(btn)btn.disabled=false;toast(err.message)}
+}
+async function cancelAbsence(id,btn){
+  const a=absences.find(x=>x.id===id);if(!a)return;
+  if(!btn.dataset.sure){btn.dataset.sure="1";const old=btn.textContent;btn.textContent="Потвърди";setTimeout(()=>{if(btn.isConnected){btn.textContent=old;delete btn.dataset.sure}},4000);return}
+  btn.disabled=true;
+  try{await api("absences/cancel",{id});await refresh();toast(a.ticket?"Заявката е отменена":"Отсъствието е премахнато");
+    if(!$("#drawer").hidden){const t=a.ticket&&tickets.find(x=>x.id===a.ticket);if(t&&ui.openId===t.id)openLeave(t);else closeDrawer()}}
+  catch(err){btn.disabled=false;toast(err.message)}
+}
+function openDay(iso){
+  const its=absences.filter(a=>live(a)&&a.from<=iso&&a.to>=iso);
+  showDrawer(`<div class="dh"><h2>${bgd(iso)}${holidayName(iso)?` · ${esc(holidayName(iso))}`:""}</h2><button type="button" data-x aria-label="Затвори">✕</button></div>
+    <div class="db stack">${its.map(a=>`<button type="button" class="arow abtn" data-a="${esc(a.id)}">${av(a.user)}<div class="ainfo"><b>${esc(uname(a.user))}</b> · ${esc(atype(a.type).l)}<div>${period(a)}</div></div>${a.status==="pending"?aPill("pending"):""}</button>`).join("")||`<div class="note">Никой не отсъства.</div>`}</div>
+    <div class="df"><div class="r"><button type="button" data-x>Затвори</button><button type="button" class="primary" id="dayAdd">+ Отсъствие</button></div></div>`);
+  $("#drawer").querySelectorAll(".abtn").forEach(b=>b.onclick=()=>openAbsenceInfo(b.dataset.a));
+  $("#dayAdd").onclick=()=>openAbsence({from:iso});
+}
+function openAbsenceInfo(id){
+  const a=absences.find(x=>x.id===id);if(!a)return;
+  const t=a.ticket&&tickets.find(x=>x.id===a.ticket);if(t){openTicket(t.id);return}
+  ui.openId=null;
+  showDrawer(`<div class="dh"><h2>${esc(atype(a.type).l)}</h2><button type="button" data-x aria-label="Затвори">✕</button></div>
+    <div class="db stack">${absCard(a)}</div>
+    <div class="df">${canCancel(a)?`<button type="button" class="danger" id="aDel">Премахни</button>`:""}<div class="r"><button type="button" data-x>Затвори</button></div></div>`);
+  const b=$("#aDel");if(b)b.onclick=()=>cancelAbsence(a.id,b);
+}
+function absCard(a){
+  return `<div class="rsum acard"><dl>
+    <dt>Служител</dt><dd><span class="who">${av(a.user)}${esc(uname(a.user))}</span></dd>
+    <dt>Вид</dt><dd><span class="tdot" style="background:var(${atype(a.type).c})"></span>${esc(atype(a.type).l)}</dd>
+    <dt>Период</dt><dd><b>${period(a)}</b>${a.days?` · ${daysTxtW(a.days)}`:""}</dd>
+    ${a.note?`<dt>Бележка</dt><dd>${esc(a.note)}</dd>`:""}
+    <dt>Статус</dt><dd>${atype(a.type).approval||a.ticket?aPill(a.status):"Записано в календара"}</dd>
+    ${a.decidedBy?`<dt>${a.status==="rejected"?"Отказал":"Одобрил"}</dt><dd>${esc(uname(a.decidedBy))} · ${fmt(a.decidedAt)}${a.decisionNote?`<div class="note">„${esc(a.decisionNote)}“</div>`:""}</dd>`:""}
+    <dt>Въведено</dt><dd>${fmt(a.createdAt)}${a.by&&a.by!==a.user?` от ${esc(uname(a.by))}`:""}</dd>
+  </dl></div>${clashTxt(a)}`;
+}
+// Тикет „заявка за отпуска“ – вместо обикновената бланка
+function openLeave(t){
+  const a=absences.find(x=>x.ticket===t.id);
+  const pend=a&&a.status==="pending";
+  showDrawer(`<div class="dh"><h2><span class="mono">${tno(t.no)}</span> Заявка за отпуска</h2><button type="button" data-x aria-label="Затвори">✕</button></div>
+    <div class="db stack">
+      ${a?absCard(a):`<div class="rsum"><div class="pre">${esc(t.description)}</div></div>`}
+      ${pend&&isApprover()?`<div class="apanel warnp"><div class="aph"><b>Решение</b><span class="note">Служителят ще получи известие.</span></div>
+        <label class="f">Коментар (по желание; при отказ – причината)<textarea id="lv_note" rows="2"></textarea></label>
+        <div class="abtns"><button type="button" class="okb" id="lvOk">Одобри</button><button type="button" class="nob" id="lvNo">Откажи</button></div></div>`
+        :pend?`<div class="note">Заявката чака одобрение от отдел „${MGR_DEPT}“. Докато не бъде одобрена, в календара е с щрихи.</div>`:""}
+      ${threadHtml(t)}
+      ${changesHtml(t)}
+    </div>
+    <div class="df">${(t.reporter===me.id||me.isAdmin)?`<button type="button" class="danger" id="delT">Изтрий</button>`:""}<div class="r">${a&&canCancel(a)?`<button type="button" id="lvCancel">Отмени заявката</button>`:""}<button type="button" data-x>Затвори</button></div></div>`);
+  bindThread(t);
+  const ok=$("#lvOk");if(ok){ok.onclick=()=>decide(a.id,"approve",$("#lv_note").value.trim(),ok);$("#lvNo").onclick=()=>decide(a.id,"reject",$("#lv_note").value.trim(),$("#lvNo"))}
+  const c=$("#lvCancel");if(c)c.onclick=()=>cancelAbsence(a.id,c);
+  const del=$("#delT");if(del)del.onclick=()=>{if(del.dataset.sure)deleteTicket(t);else{del.dataset.sure="1";del.textContent="Потвърди изтриване";setTimeout(()=>{if(del.isConnected){del.textContent="Изтрий";delete del.dataset.sure}},4000)}};
+}
+function openAbsence(preset){
+  preset=preset||{};ui.openId=null;
+  const from=preset.from||todayStr();
+  showDrawer(`<div class="dh"><h2>Ново отсъствие</h2><button type="button" data-x aria-label="Затвори">✕</button></div>
+    <div class="db stack" id="af">
+      ${isApprover()?`<label class="f">Служител<select id="a_user">${team().map(u=>`<option value="${esc(u.id)}" ${u.id===me.id?"selected":""}>${esc(u.name)}${u.id===me.id?" (аз)":""}</option>`).join("")}</select></label>`:""}
+      <div class="f"><span>Вид</span><div class="atypes" role="radiogroup">${ATYPES.map((t,i)=>`<label class="atype" style="--ac:var(${t.c})"><input type="radio" name="a_type" value="${t.k}" ${i===0?"checked":""}><span>${t.l}</span></label>`).join("")}</div></div>
+      <div class="g2"><label class="f">От${dateIn("a_from",from)}</label><label class="f">До (включително)${dateIn("a_to",preset.to||from)}</label></div>
+      <div class="ainfo2" id="a_info"></div>
+      <label class="f">Бележка<textarea id="a_note" rows="3" placeholder="По желание: причина, кой ви замества, телефон за връзка…"></textarea></label>
+    </div>
+    <div class="df"><div class="r"><button type="button" data-x>Отказ</button><button type="button" class="primary" id="aSave">Запиши</button></div></div>`);
+  const info=()=>{
+    const t=atype(($("input[name=a_type]:checked")||{}).value),f=bgToIso($("#a_from").value),to=bgToIso($("#a_to").value)||f;
+    const n=f&&to&&to>=f?workDaysBetween(f,to):0;
+    $("#a_info").innerHTML=(f&&to&&to<f?`<div class="clash">Крайната дата е преди началната.</div>`:f?`<b>${daysTxtW(n)}</b> <span class="note">(без събота, неделя и официалните празници)</span>`:"")
+      +`<div class="${t.approval?"apnote":"note"}">${t.approval?`Ще отиде като тикет към отдел „${MGR_DEPT}“ и ще стои като <b>изчакваща одобрение</b>, докато управителят не я одобри.`:"Записва се направо в календара, без одобрение."}</div>`
+      +(f&&to>=f?clashTxt({id:"",user:($("#a_user")||{}).value||me.id,from:f,to}):"");
+    $("#aSave").textContent=t.approval?"Изпрати за одобрение":"Запиши";
+  };
+  $("#af").addEventListener("input",info);$("#af").addEventListener("change",info);
+  // „До“ следва „От“, ако е останало по-рано
+  $("#a_from").addEventListener("focusout",()=>{const f=bgToIso($("#a_from").value),t=bgToIso($("#a_to").value);if(f&&(!t||t<f))dset("#a_to",f);info()});
+  info();
+  $("#aSave").onclick=async()=>{
+    const from=dval("#a_from","От дата");if(from===null)return;if(!from){toast("Изберете от коя дата.");return}
+    const to=dval("#a_to","До дата");if(to===null)return;
+    const b=$("#aSave");b.disabled=true;
+    try{
+      const r=await api("absences/save",{user:($("#a_user")||{}).value||me.id,type:$("input[name=a_type]:checked").value,from,to:to||from,note:$("#a_note").value.trim()});
+      await refresh();closeDrawer();const d=new Date(from);cal.y=d.getFullYear();cal.m=d.getMonth();render();
+      toast(r.pending?"Заявката е изпратена за одобрение":"Записано в календара");
+    }catch(e){b.disabled=false;toast(e.message)}
+  };
+}
+
 /* ---------- notifications (bell) ---------- */
 const canPop=()=>"Notification" in window;
 function notifText(n){
   const t=tickets.find(x=>x.id===n.ticket),no=t?tno(t.no):"тикет",by=uname(n.by);
   if(n.type==="note")return {head:`${by} добави бележка към ${no}`,body:n.text?`„${n.text}“`:(t?t.title:"")};
+  if(n.type==="leave_req")return {head:`${by} иска отпуска – чака вашето одобрение`,body:t?t.title:(n.text||"")};
+  if(n.type==="leave_ok")return {head:`${by} одобри вашата отпуска`,body:(t?t.title:"")+(n.reason?` – „${n.reason}“`:"")};
+  if(n.type==="leave_no")return {head:`${by} отказа вашата отпуска`,body:(t?t.title:"")+(n.reason?` – „${n.reason}“`:"")};
+  if(n.type==="leave_cancel")return {head:`${by} отмени отпуска`,body:t?t.title:""};
   return {head:`${by} ${n.type==="transferred"?"ви прехвърли":"ви възложи"} ${no}`,body:(t?t.title:"")+(n.reason?` – „${n.reason}“`:"")};
 }
 function renderBell(){
@@ -1047,7 +1295,7 @@ async function openNotif(nid,tid){
   const n=notifs.find(x=>x.id===nid);if(n&&!n.read){n.read=true;renderBell();api("notifications/read",{ids:[nid]}).catch(()=>{})}
   $("#bellPanel").hidden=true;$("#btnBell").setAttribute("aria-expanded","false");
   const t=tickets.find(x=>x.id===tid);if(!t){toast("Тикетът вече не съществува.");return}
-  ui.view=t.kind==="repair"?"repairs":(t.assignee===me.id?"mine":"all");render();openTicket(t.id);
+  ui.view=t.kind==="repair"?"repairs":t.kind==="leave"?"calendar":(t.assignee===me.id?"mine":"all");render();openTicket(t.id);
 }
 $("#btnBell").onclick=e=>{e.stopPropagation();const p=$("#bellPanel");p.hidden=!p.hidden;$("#btnBell").setAttribute("aria-expanded",String(!p.hidden));if(!p.hidden)drawBellPanel()};
 $("#bellPanel").addEventListener("click",e=>{e.stopPropagation();const b=e.target.closest("[data-nid]");if(b)openNotif(b.dataset.nid,b.dataset.tid)});

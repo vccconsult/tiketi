@@ -1,6 +1,7 @@
 import {
   FILE_MAX_BYTES, FILE_CHUNK, FILES_PER_TICKET, STATUSES, REPAIR_STATUSES, REPAIR_PATH, STATUS_LABELS, LOGIN_MAX_FAILS, json, fail, HttpError, nowIso, maxUsers, str, validUsername,
   hashPassword, verifyPassword, dummyVerify, createSession, clearCookie, ensureSchema, userCount, clientIp,
+  ABSENCE_TYPES, MANAGER_DEPT, workDays,
 } from "../../lib/server.js";
 import { emailConfig, sendMail, notifyAssigned } from "../../lib/email.js";
 // Дата по фактура: ГГГГ-ММ-ДД или празно
@@ -91,8 +92,14 @@ function notifyStmt(env, userId, ticketId, type, byId, data, at) {
 /* ---------- зареждане и синхронизация ---------- */
 // „Курсор“: докъде е стигнал браузърът – последен запис в историята, изтрит тикет, известие и версия на настройките
 const cursorStmt = (env, me) => env.DB.prepare(`SELECT (SELECT MAX(id) FROM ticket_log) AS log, (SELECT MAX(id) FROM tombstones) AS tomb,
-  (SELECT MAX(id) FROM notifications WHERE user_id = ?) AS notif, (SELECT v FROM meta WHERE k = 'cfg_rev') AS cfg`).bind(me.id);
-const cursorOf = r => ({ log: r.log || 0, tomb: r.tomb || 0, notif: r.notif || 0, cfg: String(r.cfg || "0") });
+  (SELECT MAX(id) FROM notifications WHERE user_id = ?) AS notif, (SELECT v FROM meta WHERE k = 'cfg_rev') AS cfg, (SELECT v FROM meta WHERE k = 'abs_rev') AS abs`).bind(me.id);
+const cursorOf = r => ({ log: r.log || 0, tomb: r.tomb || 0, notif: r.notif || 0, cfg: String(r.cfg || "0"), abs: String(r.abs || "0") });
+// Календарът: промяна в отсъствията
+const bumpAbs = env => env.DB.prepare("INSERT INTO meta (k, v) VALUES ('abs_rev', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(String(Date.now()) + Math.random().toString(36).slice(2, 6));
+// Отсъствия от последната година напред (за календара)
+const absStmt = env => env.DB.prepare("SELECT * FROM absences WHERE end_date >= date('now', '-400 days') ORDER BY start_date, id");
+const mapAbs = a => ({ id: sid(a.id), user: sid(a.user_id), type: a.type, from: a.start_date, to: a.end_date, days: a.days, note: a.note, status: a.status,
+  ticket: sid(a.ticket_id), by: sid(a.created_by), decidedBy: sid(a.decided_by), decidedAt: a.decided_at || "", decisionNote: a.decision_note || "", createdAt: a.created_at });
 // Отбелязва промяна в потребители, компании или отдели – за да ги презаредят другите
 const bumpCfg = env => env.DB.prepare("INSERT INTO meta (k, v) VALUES ('cfg_rev', ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(String(Date.now()));
 function mapTickets(rows, logs, files) {
@@ -128,6 +135,24 @@ function cfgPayload(env, me, users, companies, depts, cats) {
   };
 }
 
+async function managerDept(env) {
+  let d = await env.DB.prepare("SELECT id FROM departments WHERE name = ? COLLATE NOCASE").bind(MANAGER_DEPT).first();
+  if (!d) {   // ако администраторът го е изтрил – създава се наново
+    d = { id: (await env.DB.prepare("INSERT INTO departments (name, created_at, form) VALUES (?, ?, 'standard')").bind(MANAGER_DEPT, nowIso()).run()).meta.last_row_id };
+    await bumpCfg(env).run();
+  }
+  return d.id;
+}
+async function isManager(env, me) {
+  if (me.isAdmin) return true;
+  const r = await env.DB.prepare("SELECT d.name FROM users u JOIN departments d ON d.id = u.department_id WHERE u.id = ?").bind(me.id).first();
+  return !!r && r.name.toLowerCase() === MANAGER_DEPT.toLowerCase();
+}
+async function absenceById(env, id) {
+  const a = await env.DB.prepare("SELECT * FROM absences WHERE id = ?").bind(parseInt(id, 10) || 0).first();
+  if (!a) fail("Отсъствието не съществува.", 404);
+  return a;
+}
 const needAdmin = me => { if (!me.isAdmin) fail("Само администратор може да прави това.", 403); };
 
 async function log(env, ticketId, userId, type, dataObj, at) {
@@ -230,7 +255,9 @@ const ROUTES = {
       env.DB.prepare("SELECT id, ticket_id, type, by_id, data, at, read FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 50").bind(me.id),
       cursorStmt(env, me),
     ]);
+    const abs = await absStmt(env).all();
     return json({
+      absences: abs.results.map(mapAbs),
       ...cfgPayload(env, me, users, companies, depts, cats),
       tickets: mapTickets(tickets.results, logs.results, files.results),
       notifications: notifs.results.map(mapNotif),
@@ -261,6 +288,7 @@ const ROUTES = {
       ]);
       out.tickets = mapTickets(t.results, l.results, f.results);
     }
+    if (q.has("abs") && String(q.get("abs") || "") !== c.abs) out.absences = (await absStmt(env).all()).results.map(mapAbs);
     if (String(q.get("cfg") || "") !== c.cfg) {
       const [users, companies, depts, cats] = await env.DB.batch([
         env.DB.prepare("SELECT id, username, full_name, role, active, department_id, email, notify FROM users ORDER BY id"),
@@ -281,6 +309,7 @@ const ROUTES = {
     const dept = await deptId(env, body.department);
     const old = id ? await env.DB.prepare("SELECT * FROM tickets WHERE id = ?").bind(id).first() : null;
     if (id && !old) fail("Тикетът не съществува.", 404);
+    if (old && old.kind === "leave") fail("Заявката за отпуска се одобрява или отказва с бутоните в нея.");
     // Видът се определя при създаване от бланката на отдела и после не се сменя
     let kind = old ? (old.kind || "ticket") : "ticket";
     if (!old && dept) kind = (await env.DB.prepare("SELECT form FROM departments WHERE id = ?").bind(dept).first())?.form === "repair" ? "repair" : "ticket";
@@ -429,10 +458,13 @@ const ROUTES = {
 
   "POST tickets/delete": async ({ env, me, body }) => {
     const id = parseInt(body.id, 10) || 0;
-    const t = await env.DB.prepare("SELECT reporter_id FROM tickets WHERE id = ?").bind(id).first();
+    const t = await env.DB.prepare("SELECT reporter_id, kind FROM tickets WHERE id = ?").bind(id).first();
     if (!t) fail("Тикетът не съществува.", 404);
     if (!me.isAdmin && t.reporter_id !== me.id) fail("Само подалият тикета или администратор може да го изтрие.", 403);
-    await env.DB.batch([env.DB.prepare("DELETE FROM ticket_log WHERE ticket_id = ?").bind(id),
+    await env.DB.batch([
+      // изтрита заявка за отпуска: ако още чака – отменя се, иначе остава в календара без тикет
+      env.DB.prepare("UPDATE absences SET status = CASE status WHEN 'pending' THEN 'cancelled' ELSE status END, ticket_id = NULL, updated_at = ? WHERE ticket_id = ?").bind(nowIso(), id),
+      bumpAbs(env),env.DB.prepare("DELETE FROM ticket_log WHERE ticket_id = ?").bind(id),
       env.DB.prepare("DELETE FROM file_chunks WHERE file_id IN (SELECT id FROM files WHERE ticket_id = ?)").bind(id),
       env.DB.prepare("DELETE FROM files WHERE ticket_id = ?").bind(id), env.DB.prepare("DELETE FROM notifications WHERE ticket_id = ?").bind(id),
       env.DB.prepare("DELETE FROM tickets WHERE id = ?").bind(id),
@@ -451,6 +483,82 @@ const ROUTES = {
       await log(env, f.ticket_id, me.id, "filedel", { name: f.name }, now),
       env.DB.prepare("UPDATE tickets SET updated_at = ? WHERE id = ?").bind(now, f.ticket_id),
     ]);
+    return json({ ok: true });
+  },
+
+  /* ---------- календар: отсъствия и заявки за отпуска ---------- */
+  "POST absences/save": async ({ env, me, body }) => {
+    const type = ABSENCE_TYPES[body.type] ? body.type : fail("Изберете вид на отсъствието.");
+    const from = dateOnly(body.from), to = dateOnly(body.to) || from;
+    if (!from) fail("Изберете от коя дата.");
+    if (to < from) fail("Крайната дата е преди началната.");
+    if ((new Date(to) - new Date(from)) / 864e5 > 120) fail("Едно отсъствие може да е най-много 120 дни. Разделете го на части.");
+    const mgr = await isManager(env, me);
+    const uid = body.user && String(body.user) !== String(me.id) ? (mgr ? await activeUserId(env, body.user) : fail("Само управител или администратор може да въвежда отсъствие за колега.", 403)) : me.id;
+    const ov = await env.DB.prepare("SELECT start_date, end_date FROM absences WHERE user_id = ? AND status IN ('pending','approved') AND start_date <= ? AND end_date >= ? LIMIT 1").bind(uid, to, from).first();
+    if (ov) fail(`В тези дати вече има отсъствие (${bgDate(ov.start_date)} – ${bgDate(ov.end_date)}). Отменете го или изберете други дати.`);
+    const days = workDays(from, to), note = str(body.note, 1000), now = nowIso(), T = ABSENCE_TYPES[type];
+    if (T.approval && !days) fail("В избрания период няма работни дни – за почивни и празнични дни не се пуска отпуска.");
+    const u = await env.DB.prepare("SELECT full_name FROM users WHERE id = ?").bind(uid).first();
+    let tid = null;
+    if (T.approval) {
+      // Заявката отива като тикет в отдел „Управител“; ако там има само един човек – директно при него
+      const dept = await managerDept(env);
+      const mgrs = (await env.DB.prepare("SELECT id FROM users WHERE department_id = ? AND active = 1").bind(dept).all()).results.map(r => r.id);
+      const asg = mgrs.length === 1 && mgrs[0] !== uid ? mgrs[0] : null;
+      const period = from === to ? bgDate(from) : `${bgDate(from)} – ${bgDate(to)}`;
+      const title = `${T.l}: ${u.full_name} · ${period}`.slice(0, 140);
+      const desc = `${u.full_name} иска ${T.l.toLowerCase()} от ${bgDate(from)} до ${bgDate(to)} – ${days} ${days === 1 ? "работен ден" : "работни дни"}.${note ? "\n\nБележка: " + note : ""}`;
+      const r = await env.DB.prepare("INSERT INTO tickets (title, description, company_id, site, department_id, category, priority, status, reporter_id, assignee_id, created_at, updated_at, kind) VALUES (?,?,NULL,'',?,?,2,'lv_wait',?,?,?,?,'leave')")
+        .bind(title, desc, dept, "Отпуска", uid, asg, now, now).run();
+      tid = r.meta.last_row_id;
+      const notify = (mgrs.length ? mgrs : (await env.DB.prepare("SELECT id FROM users WHERE role = 'admin' AND active = 1").all()).results.map(r => r.id)).filter(x => x !== me.id);
+      await env.DB.batch([
+        await log(env, tid, me.id, "create", { status: "lv_wait" }, now),
+        ...notify.map(m => notifyStmt(env, m, tid, "leave_req", uid, { text: period }, now)),
+      ]);
+    }
+    const r = await env.DB.prepare("INSERT INTO absences (user_id, type, start_date, end_date, days, note, status, ticket_id, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(uid, type, from, to, days, note, T.approval ? "pending" : "approved", tid, me.id, now, now).run();
+    await bumpAbs(env).run();
+    return json({ ok: true, id: sid(r.meta.last_row_id), ticket: sid(tid), pending: T.approval });
+  },
+
+  // Одобрение / отказ от управител (или администратор)
+  "POST absences/decide": async ({ env, me, body }) => {
+    if (!(await isManager(env, me))) fail(`Само служител от отдел „${MANAGER_DEPT}“ или администратор може да одобрява отпуски.`, 403);
+    const a = await absenceById(env, body.id);
+    if (a.status !== "pending") fail("Заявката вече е " + ({ approved: "одобрена", rejected: "отказана", cancelled: "отменена" }[a.status] || "решена") + ".");
+    const ok = body.decision === "approve", note = str(body.note, 1000), now = nowIso();
+    const st = ok ? "approved" : "rejected", tst = ok ? "lv_ok" : "lv_no";
+    const stm = [env.DB.prepare("UPDATE absences SET status = ?, decided_by = ?, decided_at = ?, decision_note = ?, updated_at = ? WHERE id = ?").bind(st, me.id, now, note, now, a.id), bumpAbs(env)];
+    if (a.ticket_id) {
+      stm.push(await log(env, a.ticket_id, me.id, "status", { from: "lv_wait", to: tst, ...(note ? { reason: note } : {}) }, now),
+        env.DB.prepare("UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?").bind(tst, now, a.ticket_id));
+      if (a.user_id !== me.id) stm.push(notifyStmt(env, a.user_id, a.ticket_id, ok ? "leave_ok" : "leave_no", me.id, note ? { reason: note } : {}, now));
+    }
+    await env.DB.batch(stm);
+    return json({ ok: true });
+  },
+
+  // Отмяна от служителя (или управител) – и на вече одобрена отпуска
+  "POST absences/cancel": async ({ env, me, body }) => {
+    const a = await absenceById(env, body.id);
+    const mgr = await isManager(env, me);
+    if (a.user_id !== me.id && a.created_by !== me.id && !mgr) fail("Може да отмените само свое отсъствие.", 403);
+    if (!["pending", "approved"].includes(a.status)) fail("Отсъствието вече е отказано или отменено.");
+    const now = nowIso(), stm = [bumpAbs(env)];
+    if (!a.ticket_id) stm.push(env.DB.prepare("DELETE FROM absences WHERE id = ?").bind(a.id));   // без одобрение – просто се маха
+    else {
+      const t = await env.DB.prepare("SELECT status, assignee_id FROM tickets WHERE id = ?").bind(a.ticket_id).first();
+      stm.push(env.DB.prepare("UPDATE absences SET status = 'cancelled', updated_at = ? WHERE id = ?").bind(now, a.id),
+        await log(env, a.ticket_id, me.id, "status", { from: t ? t.status : "lv_wait", to: "lv_cancel", ...(str(body.reason, 500) ? { reason: str(body.reason, 500) } : {}) }, now),
+        env.DB.prepare("UPDATE tickets SET status = 'lv_cancel', updated_at = ? WHERE id = ?").bind(now, a.ticket_id));
+      // управителят, който я е одобрил, научава за отмяната
+      if (a.decided_by && a.decided_by !== me.id) stm.push(notifyStmt(env, a.decided_by, a.ticket_id, "leave_cancel", me.id, {}, now));
+      if (a.user_id !== me.id) stm.push(notifyStmt(env, a.user_id, a.ticket_id, "leave_cancel", me.id, {}, now));
+    }
+    await env.DB.batch(stm);
     return json({ ok: true });
   },
 
@@ -704,7 +812,7 @@ const ROUTES = {
     const q = v => '"' + String(v ?? "").replace(/"/g, '""') + '"';
     const rows = [["№", "Вид", "Заглавие", "Описание", "Компания / клиент", "Обект", "Продукт", "Сериен №", "Дата по фактура", "Изпратено към Риека", "За замяна", "Нов сериен №", "Изписано ново (3301)", "Документ № 3301", "Отдел", "Категория", "Приоритет", "Статус", "Подал", "Отговорник", "Създаден", "Обновен", "История"].map(q).join(";")];
     for (const t of tickets.results) rows.push([
-      "ТК-" + String(t.id).padStart(4, "0"), t.kind === "repair" ? "Ремонт" : "Тикет", t.title, t.description, C[t.company_id] || t.client_name || "", t.site,
+      "ТК-" + String(t.id).padStart(4, "0"), t.kind === "repair" ? "Ремонт" : t.kind === "leave" ? "Отпуска" : "Тикет", t.title, t.description, C[t.company_id] || t.client_name || "", t.site,
       t.product || "", t.serial || "", bgDate(t.invoice_date), bgDate(t.sent_date), t.kind === "repair" ? (t.replaced ? "Да" : "Не") : "", t.new_serial || "", t.kind === "repair" && t.replaced ? (t.issued ? "Да" : "Не") : "", t.issue_doc || "", D[t.department_id] || "", t.category, P[t.priority], S[t.status],
       U[t.reporter_id] || "", t.assignee_id ? U[t.assignee_id] || "" : "Неразпределен", loc(t.created_at), loc(t.updated_at), (L[t.id] || []).join("\n"),
     ].map(q).join(";"));

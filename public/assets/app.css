@@ -221,3 +221,80 @@ tbody tr[style] td:first-child{box-shadow:inset 6px 0 0 var(--sc)}
 .combo-list li.cur{font-weight:600;color:var(--accent)}
 .combo-list li.none{color:var(--muted);font-style:italic}
 .combo-list li.empty{color:var(--muted);cursor:default}
+/* date fields dd.mm.yyyy */
+.dt{position:relative;display:flex;align-items:stretch}
+.dt .dtin{flex:1;min-width:0;padding-right:40px;font-variant-numeric:tabular-nums}
+.dt .dtin.bad{border-color:var(--st-red,#d92d20);box-shadow:0 0 0 3px color-mix(in srgb,var(--st-red,#d92d20) 20%,transparent)}
+.dt .dtpick{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:32px;height:32px;padding:0;display:grid;place-items:center;border:0;background:transparent;color:var(--muted);cursor:pointer;border-radius:6px}
+.dt .dtpick:hover{background:var(--surface-2);color:var(--fg)}
+.dt .dtnative{position:absolute;right:0;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none;border:0;padding:0}
+/* ---------- calendar ---------- */
+:root{--lv-purple:#7c3aed}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--lv-purple:#8b5cf6}}
+:root[data-theme="dark"]{--lv-purple:#8b5cf6}
+.vc.warnc:not(:empty){background:var(--st-orange);color:#fff}
+.calbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.calnav{display:flex;align-items:center;gap:8px}
+.calnav h2{margin:0;min-width:180px;text-align:center;font-size:20px}
+.calnav button{min-width:40px}
+.calbar select{width:auto;min-width:200px}
+.callegend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px;color:var(--muted);align-items:center}
+.callegend .lg{display:inline-flex;align-items:center;gap:6px;color:var(--fg)}
+.callegend i{width:14px;height:14px;border-radius:4px;display:inline-block}
+.callegend i.hatch,.ach.pend{background:repeating-linear-gradient(135deg,color-mix(in srgb,var(--ac) 28%,var(--surface)) 0 5px,var(--surface) 5px 10px);border:1.5px dashed var(--ac)}
+.callegend i.hol{background:color-mix(in srgb,var(--st-red) 14%,var(--surface));border:1px solid color-mix(in srgb,var(--st-red) 40%,transparent)}
+.calwrap{overflow-x:auto}
+.calgrid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--line);gap:1px;min-width:560px}
+.cwd{background:var(--surface-2);padding:6px 8px;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.cwd.we{color:var(--st-red)}
+.cday{background:var(--surface);min-height:104px;padding:5px 5px 6px;display:flex;flex-direction:column;gap:3px;cursor:pointer;min-width:0}
+.cday:hover{background:color-mix(in srgb,var(--accent) 5%,var(--surface))}
+.cday.we{background:color-mix(in srgb,var(--fg) 3.5%,var(--surface))}
+.cday.hol{background:color-mix(in srgb,var(--st-red) 8%,var(--surface))}
+.cday.out{opacity:.45}
+.cdn{display:flex;align-items:baseline;gap:6px;font-size:13px;font-weight:600;padding:0 3px;min-width:0}
+.cday.we .cdn,.cday.hol .cdn{color:var(--st-red)}
+.cday.today .cdn>span:first-child{background:var(--accent);color:#fff;border-radius:999px;min-width:24px;height:24px;display:inline-grid;place-items:center;padding:0 6px}
+.cdn .hn{font-size:11px;font-weight:500;color:var(--st-red);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ach{display:flex;align-items:center;gap:5px;width:100%;min-width:0;border:0;border-radius:5px;padding:3px 6px;font-size:12px;line-height:1.25;text-align:left;cursor:pointer;background:var(--ac);color:#fff;font-weight:600}
+.ach .an{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:0 1 auto;min-width:0}
+.ach .at{font-weight:400;opacity:.9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 0;min-width:0}
+.ach.pend{color:var(--fg)}
+.ach.pend .at{color:var(--st-orange);font-weight:600;opacity:1}
+.ach:hover{filter:brightness(1.08)}
+.amore{border:0;background:none;color:var(--muted);font-size:12px;padding:0 4px;text-align:left;cursor:pointer}
+.apanel{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.apanel.warnp{border-color:color-mix(in srgb,var(--st-orange) 55%,var(--line));box-shadow:inset 4px 0 0 var(--st-orange)}
+.aph{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:4px 12px}
+.arow{display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--line);font-size:14px;min-width:0}
+.aph+.arow{border-top:0}
+.arow.abtn{width:100%;background:none;border:1px solid var(--line);border-radius:8px;padding:8px 10px;text-align:left;cursor:pointer;color:var(--fg)}
+.ainfo{flex:1;min-width:0}
+.abtns{display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end}
+.okb{background:var(--st-green)!important;color:#fff!important;border-color:var(--st-green)!important}
+.nob{background:var(--st-red);color:#fff;border-color:var(--st-red)}
+.nob.ghost{background:transparent;color:var(--st-red)}
+.tdot{display:inline-block;width:10px;height:10px;border-radius:3px;flex:none;margin-right:6px;vertical-align:middle}
+.clash{margin-top:4px;font-size:12.5px;color:var(--st-orange);font-weight:500}
+.apnote{font-size:13px;color:var(--fg);background:color-mix(in srgb,var(--st-orange) 10%,var(--surface));border-radius:8px;padding:8px 10px;margin-top:6px}
+.ainfo2{font-size:14px}
+.atypes{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
+.atype{position:relative;display:inline-flex;align-items:center;border:1.5px solid var(--line);border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer;text-transform:none;letter-spacing:0;font-weight:500;color:var(--fg)}
+.atype input{position:absolute;opacity:0;pointer-events:none}
+.atype:has(input:checked){background:var(--ac);border-color:var(--ac);color:#fff}
+.atype:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.f>span:first-child{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.away{font-size:11px;font-weight:600;color:#fff;background:var(--ac);border-radius:999px;padding:1px 7px;margin-left:2px}
+.acard .tdot{margin-right:6px}
+@media (max-width:640px){
+  .calgrid{min-width:0}
+  .cday{min-height:64px;padding:3px}
+  .cdn .hn{display:none}
+  .ach{padding:2px 4px;font-size:11px}
+  .ach .at{display:none}
+  .calnav h2{min-width:0;font-size:17px}
+  .calbar select{min-width:0;width:100%}
+  .arow{flex-wrap:wrap}
+  .abtns{width:100%;justify-content:flex-start}
+}
+.rsum .pre{white-space:pre-wrap}
