@@ -1,7 +1,7 @@
 import {
   FILE_MAX_BYTES, FILE_CHUNK, FILES_PER_TICKET, STATUSES, REPAIR_STATUSES, REPAIR_PATH, STATUS_LABELS, LOGIN_MAX_FAILS, json, fail, HttpError, nowIso, maxUsers, str, validUsername,
   hashPassword, verifyPassword, dummyVerify, createSession, clearCookie, ensureSchema, userCount, clientIp,
-  ABSENCE_TYPES, MANAGER_DEPT, workDays,
+  ABSENCE_TYPES, MANAGER_DEPT, workDays, APP_VERSION,
 } from "../../lib/server.js";
 import { emailConfig, sendMail, notifyAssigned } from "../../lib/email.js";
 // Дата по фактура: ГГГГ-ММ-ДД или празно
@@ -24,6 +24,9 @@ export async function onRequest(context) {
     if (method === "POST" && path === "files/upload") return await uploadFile({ request, env, me: data.user });
     const fm = method === "GET" && path.match(/^files\/(\d+)$/);
     if (fm) return await downloadFile(env, parseInt(fm[1], 10));
+    // Стари отворени раздели (без X-Tiketi-V) теглеха цялата база на всеки 15 сек – връщаме ги към входа, за да заредят новия код
+    if (method === "GET" && (path === "state" || path === "sync") && !request.headers.get("X-Tiketi-V"))
+      return json({ error: "Има нова версия на системата. Презаредете страницата." }, 401);
     const body = method === "POST" ? await request.json().catch(() => ({})) : {};
     const route = ROUTES[`${method} ${path}`];
     if (!route) fail("Непознато действие.", 404);
@@ -257,6 +260,7 @@ const ROUTES = {
     ]);
     const abs = await absStmt(env).all();
     return json({
+      v: APP_VERSION,
       absences: abs.results.map(mapAbs),
       ...cfgPayload(env, me, users, companies, depts, cats),
       tickets: mapTickets(tickets.results, logs.results, files.results),
@@ -277,8 +281,8 @@ const ROUTES = {
     ]);
     const c = cursorOf(cur.results[0]);
     const ids = [...new Set(changed.results.map(r => r.ticket_id))];
-    if (changed.results.length > 1000 || ids.length > 300) return json({ full: true });          // много промени наведнъж (напр. импорт) – пълно зареждане
-    const out = { cursor: c, deleted: gone.results.map(r => sid(r.ref_id)), notifications: notifs.results.map(mapNotif), tickets: [] };
+    if (changed.results.length > 1000 || ids.length > 300) return json({ full: true, v: APP_VERSION, u: sid(me.id) });          // много промени наведнъж (напр. импорт) – пълно зареждане
+    const out = { v: APP_VERSION, u: sid(me.id), cursor: c, deleted: gone.results.map(r => sid(r.ref_id)), notifications: notifs.results.map(mapNotif), tickets: [] };
     if (ids.length) {
       const ph = ids.map(() => "?").join(",");
       const [t, l, f] = await env.DB.batch([

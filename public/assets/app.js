@@ -1,4 +1,5 @@
 "use strict";
+const APP_V="28";   // същата като APP_VERSION в lib/server.js
 const STD_STATUSES=[
   {k:"new",l:"Нов",c:"--st-blue"},{k:"work",l:"В работа",c:"--st-orange"},{k:"wait",l:"Чака клиент",c:"--st-red"},
   {k:"done",l:"Решен",c:"--st-green"}];
@@ -124,9 +125,9 @@ function toast(msg){const t=$("#toast");t.textContent=msg;t.hidden=false;clearTi
 
 /* ---------- server ---------- */
 async function api(path,data){
-  const opt=data===undefined?{}:{method:"POST",headers:{"Content-Type":"application/json","X-Tiketi":"1"},body:JSON.stringify(data)};
+  const opt=data===undefined?{headers:{"X-Tiketi-V":APP_V}}:{method:"POST",headers:{"Content-Type":"application/json","X-Tiketi":"1","X-Tiketi-V":APP_V},body:JSON.stringify(data)};
   const r=await fetch("/api/"+path,{...opt,credentials:"same-origin"});
-  if(r.status===401){location.href="/login?expired=1";throw new Error("Сесията изтече.")}
+  if(r.status===401){cacheClear();location.href="/login?expired=1";throw new Error("Сесията изтече.")}
   let j={};try{j=await r.json()}catch(e){}
   if(!r.ok||j.error)throw new Error(j.error||"Сървърът не отговори ("+r.status+").");
   return j;
@@ -138,26 +139,66 @@ function applyCfg(s){
   me=s.me;emailOn=!!s.email;users=s.users;companies=s.companies;departments=s.departments||[];maxUsers=s.maxUsers;
 }
 function refresh(){ refreshing ||= doRefresh().finally(()=>refreshing=null); return refreshing; }
+/* ---------- локално копие на данните (IndexedDB) ----------
+   При отваряне на страницата данните се взимат от браузъра и от сървъра идват само промените.
+   Така пълното зареждане (хиляди редове от базата) става рядко – пести дневния лимит на Cloudflare D1. */
+let cacheTried=false,cacheTimer=null;
+function idb(){return new Promise((res,rej)=>{const r=indexedDB.open("tiketi",1);r.onupgradeneeded=()=>r.result.createObjectStore("kv");r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+async function cacheGet(){try{const db=await idb();return await new Promise(res=>{const q=db.transaction("kv").objectStore("kv").get("state");q.onsuccess=()=>res(q.result||null);q.onerror=()=>res(null)})}catch(e){return null}}
+function cacheSave(){
+  if(!cursor||!loaded)return;
+  clearTimeout(cacheTimer);
+  cacheTimer=setTimeout(async()=>{try{const db=await idb();db.transaction("kv","readwrite").objectStore("kv").put({v:APP_V,uid:me.id,at:Date.now(),me,emailOn,users,companies,departments,maxUsers,tickets,absences,notifs,cursor},"state")}catch(e){}},800);
+}
+function cacheClear(){try{clearTimeout(cacheTimer);idb().then(db=>db.transaction("kv","readwrite").objectStore("kv").delete("state")).catch(()=>{})}catch(e){}}
+// Нова версия на сървъра – презареждаме, но не и докато някой попълва формуляр
+function checkVersion(v){
+  if(!v||v===APP_V||!$("#drawer").hidden)return;
+  try{const t=+sessionStorage.getItem("tk_reload")||0;if(Date.now()-t<10*60*1000)return;sessionStorage.setItem("tk_reload",String(Date.now()))}catch(e){}
+  cacheClear();setTimeout(()=>location.reload(),300);
+}
 async function doRefresh(){
   try{
+    if(!cursor&&!cacheTried){
+      cacheTried=true;
+      const c=await cacheGet();
+      if(c&&c.v===APP_V&&c.cursor&&Date.now()-c.at<14*864e5){
+        const d=await api("sync?"+new URLSearchParams({log:c.cursor.log,tomb:c.cursor.tomb,notif:c.cursor.notif,cfg:c.cursor.cfg,abs:c.cursor.abs||"0"}));
+        checkVersion(d.v);
+        if(!d.full&&d.u===c.uid){
+          me=c.me;emailOn=c.emailOn;users=c.users;companies=c.companies;departments=c.departments;maxUsers=c.maxUsers;
+          tickets=c.tickets;absences=c.absences||[];notifs=c.notifs||[];cursor=c.cursor;loaded=true;
+          // нататък – като обикновена проверка за промени
+          applySync(d);announce();render();renderBell();cacheSave();
+          return;
+        }
+      }
+    }
     if(cursor){
       const q=new URLSearchParams({log:cursor.log,tomb:cursor.tomb,notif:cursor.notif,cfg:cursor.cfg,abs:cursor.abs||"0"});
       const d=await api("sync?"+q);
+      checkVersion(d.v);
       if(!d.full){
-        let changed=!!d.users;applyCfg(d);
-        if(d.absences){absences=d.absences;changed=true}
-        if(d.deleted&&d.deleted.length){const del=new Set(d.deleted);tickets=tickets.filter(t=>!del.has(t.id));changed=true}
-        for(const t of d.tickets||[]){const i=tickets.findIndex(x=>x.id===t.id);if(i>=0)tickets[i]=t;else tickets.push(t);changed=true}
-        if(d.notifications&&d.notifications.length){const have=new Set(notifs.map(n=>n.id));notifs=[...d.notifications.filter(n=>!have.has(n.id)),...notifs].slice(0,50);changed=true}
-        cursor=d.cursor;$("#warn").hidden=true;
-        if(changed){announce();render();renderBell()}
+        if(applySync(d)){announce();render();renderBell();cacheSave()}
         return;
       }
     }
     const s=await api("state");
+    checkVersion(s.v);
     applyCfg(s);tickets=s.tickets;absences=s.absences||[];notifs=s.notifications||[];cursor=s.cursor;loaded=true;$("#warn").hidden=true;
-    announce();render();renderBell();
+    announce();render();renderBell();cacheSave();
   }catch(e){const w=$("#warn");w.hidden=false;w.textContent=/лимит/.test(e.message)?e.message:"Няма връзка със сървъра: "+e.message}
+}
+
+// Прилага промените от /api/sync; връща true, ако нещо се е променило
+function applySync(d){
+  let changed=!!d.users;applyCfg(d);
+  if(d.absences){absences=d.absences;changed=true}
+  if(d.deleted&&d.deleted.length){const del=new Set(d.deleted);tickets=tickets.filter(t=>!del.has(t.id));changed=true}
+  for(const t of d.tickets||[]){const i=tickets.findIndex(x=>x.id===t.id);if(i>=0)tickets[i]=t;else tickets.push(t);changed=true}
+  if(d.notifications&&d.notifications.length){const have=new Set(notifs.map(n=>n.id));notifs=[...d.notifications.filter(n=>!have.has(n.id)),...notifs].slice(0,50);changed=true}
+  cursor=d.cursor;$("#warn").hidden=true;
+  return changed;
 }
 
 /* ---------- static filters ---------- */
@@ -779,7 +820,7 @@ $("#meBox").onclick=()=>{
     </form>
   </div>
   <div class="df"><button type="button" class="danger" id="logoutBtn">Изход</button><div class="r"><button type="button" data-x>Затвори</button></div></div>`);
-  $("#logoutBtn").onclick=async()=>{try{await api("logout",{})}catch(e){}location.href="/login?out=1"};
+  $("#logoutBtn").onclick=async()=>{cacheClear();try{await api("logout",{})}catch(e){}location.href="/login?out=1"};
   $("#pf").addEventListener("submit",async e=>{e.preventDefault();
     try{await api("me/profile",{email:$("#p_email").value.trim(),notify:$("#p_notify").checked});await refresh();toast("Запазено.")}catch(err){toast(err.message)}});
   $("#pwf").addEventListener("submit",async e=>{e.preventDefault();
@@ -1288,11 +1329,11 @@ function drawBellPanel(){
     <div class="blist">${notifs.length?notifs.map(n=>{const x=notifText(n);return `<button type="button" class="bitem ${n.read?"":"unread"}" data-nid="${esc(n.id)}" data-tid="${esc(n.ticket)}">
       ${av(n.by)}<span class="btext"><b>${esc(x.head)}</b><span>${esc(x.body)}</span><span class="note">${fmt(n.at)}</span></span></button>`}).join("")
       :`<div class="bempty">Няма известия. Тук ще виждате, когато колега ви възложи или прехвърли тикет, или добави бележка към ваш тикет.</div>`}</div>`;
-  const a=$("#bAll");if(a)a.onclick=async()=>{notifs.forEach(n=>n.read=true);renderBell();try{await api("notifications/read",{all:true})}catch(e){}};
+  const a=$("#bAll");if(a)a.onclick=async()=>{notifs.forEach(n=>n.read=true);renderBell();cacheSave();try{await api("notifications/read",{all:true})}catch(e){}};
   const pb=$("#bPerm");if(pb)pb.onclick=async()=>{try{await Notification.requestPermission()}catch(e){}drawBellPanel();if(canPop()&&Notification.permission==="granted")toast("Изскачащите известия са включени.")};
 }
 async function openNotif(nid,tid){
-  const n=notifs.find(x=>x.id===nid);if(n&&!n.read){n.read=true;renderBell();api("notifications/read",{ids:[nid]}).catch(()=>{})}
+  const n=notifs.find(x=>x.id===nid);if(n&&!n.read){n.read=true;renderBell();cacheSave();api("notifications/read",{ids:[nid]}).catch(()=>{})}
   $("#bellPanel").hidden=true;$("#btnBell").setAttribute("aria-expanded","false");
   const t=tickets.find(x=>x.id===tid);if(!t){toast("Тикетът вече не съществува.");return}
   ui.view=t.kind==="repair"?"repairs":t.kind==="leave"?"calendar":(t.assignee===me.id?"mine":"all");render();openTicket(t.id);
