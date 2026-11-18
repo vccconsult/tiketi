@@ -1,5 +1,5 @@
 "use strict";
-const APP_V="28";   // същата като APP_VERSION в lib/server.js
+const APP_V="32";   // същата като APP_VERSION в lib/server.js
 const STD_STATUSES=[
   {k:"new",l:"Нов",c:"--st-blue"},{k:"work",l:"В работа",c:"--st-orange"},{k:"wait",l:"Чака клиент",c:"--st-red"},
   {k:"done",l:"Решен",c:"--st-green"}];
@@ -7,7 +7,8 @@ const STD_STATUSES=[
 const REPAIR_STATUSES=[
   {k:"s0",code:"",l:"Регистриран",mv:"",c:"--st-grey"},
   {k:"s1300",code:"1300",l:"Получено дефектно у-во",mv:"+SW",c:"--st-blue"},
-  {k:"s3400",code:"3400",l:"Повредено към Риека",mv:"-SW",c:"--st-red"},
+  {k:"s3400",code:"3400",l:"Зачислено към Риека",mv:"-SW",c:"--st-red"},
+  {k:"ssent",code:"",l:"Изпращане към Риека",mv:"",c:"--lv-purple"},
   {k:"s1400",code:"1400",l:"Получено отремонтирано",mv:"+SW",c:"--st-orange"},
   {k:"s3300",code:"3300",l:"Ремонтирано към клиента",mv:"-SW",c:"--st-green"},
   {k:"s1401",code:"1401",l:"Връщане от Риека към гл. склад",mv:"+MW",c:"--st-green"},
@@ -17,25 +18,42 @@ const LEAVE_STATUSES=[{k:"lv_wait",l:"Изчаква одобрение",c:"--st
 const LEGACY=[{k:"closed",l:"Затворен",c:"--st-grey"},{k:"received",l:"Прието",c:"--st-grey"},{k:"processed",l:"Обработено",c:"--st-grey"},{k:"sent",l:"Пратено на Риека",c:"--st-grey"},{k:"returned",l:"Върнато от Риека",c:"--st-grey"},{k:"stocked",l:"Заведено в склада",c:"--st-grey"}];
 const STATUSES=[...STD_STATUSES,...REPAIR_STATUSES,...LEAVE_STATUSES,...LEGACY];
 const CLOSED=new Set(["done","closed","s3300","s1401","stocked","lv_ok","lv_no","lv_cancel"]);
-// Процедура: със замяна 1300 → 3301 → 3400 → 1401; без замяна 1300 → 3400 → 1400 → 3300
-const REPAIR_PATH={yes:["s0","s1300","s3301","s3400","s1401"],no:["s0","s1300","s3400","s1400","s3300"]};
-const DELTA={s0:{},s1300:{sw:1},s3400:{sw:-1},s1400:{sw:1},s3300:{sw:-1},s1401:{mw:1},s3301:{mw:-1}};
+// Процедура: със замяна 1300 → 3400 → 3301 → 1401; без замяна 1300 → 3400 → 1400 → 3300
+// със замяна: 1300 → 3400 → 3301 → изпращане към Риека → 1401; без замяна: 1300 → 3400 → изпращане → 1400 → 3300
+const REPAIR_PATH={yes:["s0","s1300","s3400","s3301","ssent","s1401"],no:["s0","s1300","s3400","ssent","s1400","s3300"]};
+// ремонти, започнати по предишния ред (изпращане преди 3301) – довършват по него
+const MID_YES=["s0","s1300","s3400","ssent","s3301","s1401"];
+// Ремонти, започнати по стария ред (3301 преди 3400), довършват по него
+const LEGACY_YES=["s0","s1300","s3301","s3400","ssent","s1401"];
+const wasSent=t=>!!t.sentDate||(t.log||[]).some(e=>(e.type==="status"&&(e.to==="s3400"||e.to==="ssent"))||(e.type==="import"&&e.status==="s3400"));
+function pathOf(t){
+  const had3400=(t.log||[]).some(e=>e.type==="status"&&e.to==="s3400");
+  let p=REPAIR_PATH.yes;
+  if(t.replaced!=="yes")p=REPAIR_PATH.no;
+  else if(t.status==="ssent"&&!t.issued)p=MID_YES;
+  else if(t.status==="s3301")p=t.sentDate?MID_YES:had3400?REPAIR_PATH.yes:LEGACY_YES;
+  else if(t.status==="s3400"&&t.issued)p=LEGACY_YES;
+  // по-стари ремонти: при 3400 вече е пусната дата на изпращане – отделната стъпка се прескача
+  if(t.status==="s3400"&&t.sentDate)p=p.filter(k=>k!=="ssent");
+  return p;
+}
+const DELTA={s0:{},ssent:{},s1300:{sw:1},s3400:{sw:-1},s1400:{sw:1},s3300:{sw:-1},s1401:{mw:1},s3301:{mw:-1}};
 // Наличност по тикета: сбор от движенията до текущата операция
 function balance(t){
-  const path=REPAIR_PATH[t.replaced==="yes"?"yes":"no"],i=path.indexOf(t.status);
+  const path=pathOf(t),i=path.indexOf(t.status);
   if(i<0)return null;
   return path.slice(0,i+1).reduce((a,k)=>({sw:a.sw+(DELTA[k].sw||0),mw:a.mw+(DELTA[k].mw||0)}),{sw:0,mw:0});
 }
-const nextOp=t=>{const path=REPAIR_PATH[t.replaced==="yes"?"yes":"no"],i=path.indexOf(t.status);return i>=0&&i<path.length-1?path[i+1]:null};
+const nextOp=t=>{const path=pathOf(t),i=path.indexOf(t.status);return i>=0&&i<path.length-1?path[i+1]:null};
 // Какво чака ремонтът – с думи, по следващата операция от процедурата
-const WAIT={s1300:"получаване на у-вото",s3301:"изписване на ново у-во към клиента",s3400:"изпращане към Риека",
+const WAIT={s1300:"получаване на у-вото",s3301:"изписване на ново у-во към клиента",s3400:"зачисляване към Риека",ssent:"изпращане към Риека",
   s1400:"отремонтираното от Риека",s1401:"връщане от Риека в гл. склад",s3300:"предаване на клиента"};
 function waitHtml(t){
   if(t.kind!=="repair")return "";
   const n=nextOp(t);
   if(!n)return REPAIR_STATUSES.some(s=>s.k===t.status)?`<div class="wait done">✓ Приключен</div>`:"";
   const o=st(n);
-  return `<div class="wait">Чака: ${WAIT[n]} <span class="mono">· ${o.code} ${o.mv}</span></div>${sentLine(t)}`;
+  return `<div class="wait">Чака: ${WAIT[n]}${o.code?` <span class="mono">· ${o.code} ${o.mv}</span>`:""}</div>${sentLine(t)}`;
 }
 // Колко дни е при Риека
 const todayStr=()=>new Date(Date.now()-new Date().getTimezoneOffset()*6e4).toISOString().slice(0,10);
@@ -80,7 +98,7 @@ document.addEventListener("change",e=>{if(e.target.classList&&e.target.classList
 const daysSince=d=>Math.max(0,Math.round((new Date(todayStr())-new Date(d))/864e5));
 const daysTxt=n=>n===0?"днес":n===1?"преди 1 ден":`преди ${n} дни`;
 function sentLine(t){
-  if(t.status!=="s3400"||!t.sentDate)return "";
+  if(!["ssent","s3400","s3301"].includes(t.status)||!t.sentDate)return "";
   const n=daysSince(t.sentDate);
   return `<div class="sentl ${n>=30?"late":""}">Изпратено ${bgd(t.sentDate)} · ${n} ${n===1?"ден":"дни"}</div>`;
 }
@@ -345,7 +363,8 @@ function renderCompanies(){
 
 /* ---------- търсене във фирмите по част от името ---------- */
 const norm=x=>String(x||"").toLowerCase().replace(/[„“”"'«»]/g,"").replace(/\s+/g," ").trim();
-function comboize(sel,placeholder){
+function comboize(sel,placeholder,opts){
+  opts=opts||{};
   if(!sel||sel.dataset.combo)return sel&&sel._combo;
   sel.dataset.combo="1";sel.hidden=true;
   const box=document.createElement("div");box.className="combo";
@@ -357,11 +376,19 @@ function comboize(sel,placeholder){
   const close=()=>{ul.hidden=true;inp.setAttribute("aria-expanded","false");act=-1};
   const draw=()=>{
     const q=norm(inp.value===curText()?"":inp.value),words=q.split(" ").filter(Boolean);
-    items=[...sel.options].filter(o=>!words.length||words.every(w=>norm(o.textContent).includes(w))).slice(0,60);
-    ul.innerHTML=items.length?items.map((o,i)=>`<li role="option" data-i="${i}" class="${o.value===sel.value?"cur":""} ${o.value?"":"none"}">${esc(o.textContent)}</li>`).join(""):`<li class="empty">Няма фирма с „${esc(inp.value)}“</li>`;
+    items=[...sel.options].filter(o=>!o.dataset.new&&(!words.length||words.every(w=>norm(o.textContent).includes(w)))).slice(0,60);
+    // Написана фирма, която я няма в списъка – може да се добави направо
+    const raw=inp.value.trim();
+    if(opts.allowNew&&raw&&raw!==curText()&&![...sel.options].some(o=>o.value&&!o.dataset.new&&norm(o.textContent)===norm(raw))){
+      const nw={value:"new:"+raw,textContent:raw,isNew:true};
+      if(items.length)items.push(nw);else items.unshift(nw);
+    }
+    ul.innerHTML=items.length?items.map((o,i)=>o.isNew?`<li role="option" data-i="${i}" class="newc">+ Нова фирма: „${esc(o.textContent)}“ <span class="note">ще се добави в „Компании“</span></li>`:`<li role="option" data-i="${i}" class="${o.value===sel.value?"cur":""} ${o.value?"":"none"}">${esc(o.textContent)}</li>`).join(""):`<li class="empty">Няма фирма с „${esc(inp.value)}“</li>`;
     ul.hidden=false;inp.setAttribute("aria-expanded","true");act=-1;
   };
-  const pick=i=>{const o=items[i];if(!o)return;sel.value=o.value;inp.value=o.value?o.textContent:"";close();sel.dispatchEvent(new Event("change",{bubbles:true}));sel.dispatchEvent(new Event("input",{bubbles:true}))};
+  const pick=i=>{let o=items[i];if(!o)return;
+    if(o.isNew){let op=sel.querySelector("option[data-new]");if(!op){op=document.createElement("option");op.dataset.new="1";sel.append(op)}op.value=o.value;op.textContent=o.textContent;o=op}
+    sel.value=o.value;inp.value=o.value?o.textContent:"";close();sel.dispatchEvent(new Event("change",{bubbles:true}));sel.dispatchEvent(new Event("input",{bubbles:true}))};
   const hi=()=>ul.querySelectorAll("li[data-i]").forEach((li,i)=>{li.classList.toggle("act",i===act);if(i===act)li.scrollIntoView({block:"nearest"})});
   inp.addEventListener("focus",()=>{inp.select();draw()});
   inp.addEventListener("input",draw);
@@ -409,12 +436,12 @@ const sitesOf=id=>{const c=comp(id);return c?String(c.sites||"").split(/\r?\n/).
 const isRepairDept=id=>(dept(id)||{}).form==="repair";
 const repairDepts=()=>departments.filter(d=>d.form==="repair");
 const clientOf=t=>cname(t.company)||t.clientName||"";
-function statusOpts(kind,sel,repl){
+function statusOpts(kind,sel,repl,t){
   if(kind!=="repair")return STD_STATUSES.map(s=>`<option value="${s.k}" ${s.k===sel?"selected":""}>${s.l}</option>`).join("");
   // Нов ремонт – само 1300; после – операциите от процедурата за замяна / без замяна
-  let keys=!repl?["s0"]:[...REPAIR_PATH[repl==="yes"?"yes":"no"]];
+  let keys=!repl?["s0"]:[...(t?pathOf({...t,replaced:repl}):REPAIR_PATH[repl==="yes"?"yes":"no"])];
   if(sel&&!keys.includes(sel))keys=[sel,...keys];
-  return keys.map(k=>{const s=st(k);return `<option value="${k}" ${k===sel?"selected":""}>${s.code?`${s.code} · ${s.l} (${s.mv})`:k==="s0"?"Регистриран (без складово движение)":`${s.l} (стар статус)`}</option>`}).join("");
+  return keys.map(k=>{const s=st(k);return `<option value="${k}" ${k===sel?"selected":""}>${s.code?`${s.code} · ${s.l} (${s.mv})`:k==="s0"?"Регистриран (без складово движение)":k==="ssent"?"Изпращане към Риека – с дата (без складово движение)":`${s.l} (стар статус)`}</option>`}).join("");
 }
 const productList=()=>[...new Set(tickets.filter(x=>x.kind==="repair"&&x.product).map(x=>x.product))].sort((a,b)=>a.localeCompare(b,"bg"));
 
@@ -436,16 +463,31 @@ function changesHtml(t){
     <div class="tl">${ch.slice().reverse().map(ev=>evHtml(ev)).join("")||`<div class="note">Още няма записи.</div>`}</div></details>`;
 }
 
+// Всички складови операции по ремонта: кога, документ, кой
+function opsTable(t){
+  const rows=(t.log||[]).filter(e=>(e.type==="status"&&e.to)||((e.type==="create"||e.type==="import")&&e.status&&e.status!=="s0"))
+    .map(e=>({k:e.type==="status"?e.to:e.status,at:e.sent&&e.to==="ssent"?e.sent:e.at,day:!!(e.sent&&e.to==="ssent"),doc:e.doc||"",sn:e.sn||"",by:e.by,imp:e.type==="import"||e.imported}))
+    .filter(r=>REPAIR_STATUSES.some(s=>s.k===r.k)&&r.k!=="s0");
+  if(!rows.length)return "";
+  return `<div class="ops"><div class="ops-h">Операции (${rows.length})</div>
+    ${rows.map(r=>{const o=st(r.k);return `<div class="oprow"><span class="opc" style="--sc:var(${o.c})">${o.code||"→"}</span><div class="opb"><div class="opt"><b>${esc(o.l)}</b><span class="date">${r.day?bgd(r.at):fmt(r.at)}</span></div>
+      <div class="note">${r.doc?`${r.k==="ssent"?"товарителница":"док."} № <span class="mono">${esc(r.doc)}</span>`:"без документ №"}${r.sn?` · нов SN <span class="mono">${esc(r.sn)}</span>`:""} · ${r.imp?"импорт":esc(uname(r.by))}</div></div></div>`}).join("")}
+  </div>`;
+}
 function stockPanel(t){
   const b=balance(t);if(!b)return "";
   const n=nextOp(t),ns=n&&st(n),repl=t.replaced==="yes";
-  const why=repl
-    ?(t.status==="s0"?"Регистриран – още няма складово движение. При получаване на у-вото: 1300 (+SW).":b.mw<0?"MW е на −1: заместващото у-во е изписано от главния склад. Връща се на 0 с операция 1401, когато отремонтираното дойде от Риека.":t.status==="s1300"?"За замяна: следва изписване на ново/заместващо у-во от главния склад (3301).":"")
-    :(t.status==="s0"?"Регистриран – още няма складово движение. При получаване на у-вото: 1300 (+SW).":b.mw===0&&!CLOSED.has(t.status)?"Без замяна – главният склад не се променя. Отремонтираното у-во от Риека отива при клиента.":"");
+  const SEND="Следва изпращане към Риека – с дата на изпращане.";
+  const why=t.status==="s0"?"Регистриран – още няма складово движение. При получаване на у-вото: 1300 (+SW).":repl
+    ?(t.status==="s1300"?"За замяна: дефектното у-во е в сервизния склад. Следва зачисляване към Риека (3400), после ново/заместващо у-во към клиента (3301) и изпращане към Риека."
+      :n==="s3301"?"Зачислено към Риека (SW −1). Следва изписване на ново/заместващо у-во от главния склад към клиента (3301), после изпращане към Риека."
+      :n==="ssent"?(t.status==="s3301"?"Новото у-во е изписано към клиента (MW −1). ":"")+SEND
+      :b.mw<0?"MW е на −1: заместващото у-во е изписано от главния склад. Връща се на 0 с операция 1401, когато отремонтираното дойде от Риека.":"")
+    :(n==="ssent"?"Зачислено към Риека (SW −1). "+SEND:b.mw===0&&!CLOSED.has(t.status)?"Без замяна – главният склад не се променя. Отремонтираното у-во от Риека отива при клиента.":"");
   return `<div class="stock">
     <div class="srow"><span class="lab">Наличност по ремонта</span><span class="chips">${balChip("SW",b.sw,true)}${balChip("MW",b.mw,true)}</span></div>
     ${why?`<div class="swhy">${why}</div>`:""}
-    ${n?`<div class="snext"><span>Чака: <b>${WAIT[n]}</b> – операция <b>${ns.code} ${esc(ns.l)}</b> <span class="mono">(${ns.mv})</span></span><button type="button" id="r_next" data-op="${n}">Избери</button></div>`
+    ${n?`<div class="snext"><span>Чака: <b>${WAIT[n]}</b> – ${ns.code?`операция <b>${ns.code} ${esc(ns.l)}</b> <span class="mono">(${ns.mv})</span>`:`<b>${esc(ns.l)}</b> <span class="note">(дата на изпращане, без складово движение)</span>`}</span><button type="button" id="r_next" data-op="${n}">Избери</button></div>`
       :`<div class="sdone">✓ Процедурата е завършена.</div>`}
   </div>`;
 }
@@ -477,6 +519,7 @@ function ticketForm(t,preset){
         <label class="f">Компания<select id="t_comp">${compOpts(t.company)}</select></label>
         <label class="f">Обект<input id="t_site" maxlength="160" list="t_sites" value="${esc(t.site||"")}" placeholder="Напр. Склад Плевен"><datalist id="t_sites"></datalist></label>
       </div>
+      <label class="f" id="t_cphone_box" hidden>Телефон на новата фирма<input id="t_cphone" type="tel" maxlength="60" placeholder="Напр. 0888 123 456"></label>
       <div class="t_cinfo">${kind==="repair"?"":compInfo(t.company)}</div>
       <label class="f">Категория<select id="t_cat">${catOpts(t.department,t.category)}</select></label>
     </div>`;
@@ -484,14 +527,20 @@ function ticketForm(t,preset){
   const yesno=v=>v==="yes"?"Да":v==="no"?"Не":"—";
   const summary=locked?`<div class="rsum" id="r_sum">
       <dl>
-        <dt>Клиент</dt><dd>${esc(clientOf(t))||"—"}</dd>
+        <dt>Клиент</dt><dd><b>${esc(clientOf(t))||"—"}</b>${(()=>{const c=comp(t.company);if(!c)return "";const x=[c.contact_person,c.phone,c.email].filter(Boolean);return x.length?`<div class="note">${x.map(esc).join(" · ")}</div>`:""})()}</dd>
         <dt>Продукт</dt><dd>${esc(t.product)}</dd>
         <dt>Сериен №</dt><dd class="mono">${esc(t.serial)}</dd>
+        ${t.newSerial?`<dt>Нов сериен №</dt><dd class="mono">${esc(t.newSerial)}</dd>`:""}
         <dt>Дата по фактура</dt><dd>${t.invoiceDate?bgd(t.invoiceDate):`<span class="note">—</span>`}</dd>
         <dt>Повреда</dt><dd class="pre">${esc(t.description)}</dd>
-        <dt>За замяна</dt><dd>${t.replaced==="yes"?`<span class="yes">Да</span>`:yesno(t.replaced)}</dd>
+        <dt>За замяна</dt><dd>${t.replaced==="yes"?`<span class="ynpill y">Да</span>`:t.replaced==="no"?`<span class="ynpill n">Не</span>`:"—"}</dd>
+        <dt>Приет</dt><dd>${fmt(t.createdAt)} · ${esc(uname(t.reporter))}</dd>
+        <dt>Отговорник</dt><dd>${t.assignee?esc(uname(t.assignee)):`<span class="note">свободен в отдела</span>`}</dd>
+        <dt>Сега</dt><dd>${pill(t.status)}${(()=>{const n=nextOp(t),o=n&&st(n);return n?`<div class="wait">Чака: ${WAIT[n]}${o.code?` <span class="mono">· ${o.code} ${o.mv}</span>`:""}</div>`:""})()}</dd>
+        ${t.sentDate?`<dt>Изпращане към Риека</dt><dd>${bgd(t.sentDate)}${["ssent","s3400","s3301"].includes(t.status)?` · <span class="${daysSince(t.sentDate)>=30?"late":""}">${daysTxt(daysSince(t.sentDate))}</span>`:""}</dd>`:""}
       </dl>
-      <div class="rsum-bar"><span class="note">Данните от приемането са заключени.</span>${me.isAdmin?`<button type="button" id="r_unlock">Поправи данните</button>`:""}</div>
+      ${opsTable(t)}
+      <div class="rsum-bar"><span class="note">Данни от приемането – всеки може да ги поправи при нужда.</span><button type="button" id="r_unlock">Поправи данните</button></div>
     </div>`:"";
   const repFields=`<div id="f_rep" class="stack repform" ${kind==="repair"?"":"hidden"}>
       ${summary}
@@ -499,6 +548,7 @@ function ticketForm(t,preset){
       <div class="g2">
         <label class="f"><span>Клиент <span class="req">*</span></span><select id="r_comp">${compOpts(t.company).replace("— без компания —","— друг клиент (напишете) —")}</select></label>
         <label class="f" id="r_cname_box" ${t.company?"hidden":""}>Име на клиента<input id="r_cname" maxlength="160" value="${esc(t.clientName||"")}" placeholder="Напр. Иван Петров, 0888 …"></label>
+        <label class="f" id="r_cphone_box" hidden>Телефон на клиента<input id="r_cphone" type="tel" maxlength="60" placeholder="Напр. 0888 123 456"></label>
       </div>
       <div class="t_cinfo">${kind==="repair"?compInfo(t.company):""}</div>
       <div class="g2">
@@ -514,8 +564,8 @@ function ticketForm(t,preset){
       </div>
       </div>
       ${locked?stockPanel(t):""}
-      ${locked&&t.status==="s3400"?`<div class="sentbox">
-        <div class="sb-h">Изпратено към Риека</div>
+      ${locked&&t.sentDate&&["ssent","s3400","s3301"].includes(t.status)?`<div class="sentbox">
+        <div class="sb-h">Изпращане към Риека</div>
         <div class="sb-row"><span class="sb-big">${t.sentDate?bgd(t.sentDate):"—"}</span>${t.sentDate?`<span class="sb-days ${daysSince(t.sentDate)>=30?"late":""}">${daysTxt(daysSince(t.sentDate))}</span>`:""}${curDoc(t)?`<span class="note">документ № <span class="mono">${esc(curDoc(t))}</span></span>`:""}</div>
         <label class="f">Дата на изпращане${dateIn("r_sentedit",t.sentDate,todayStr())}</label>
         <div class="note">Чака връщане от Риека. Поправката на датата се записва с „Запази промените“.</div>
@@ -532,7 +582,7 @@ function ticketForm(t,preset){
     ${repFields}
     <div class="g2">
       <label class="f">Приоритет<select id="t_prio">${PRIOS.map(p=>`<option value="${p.k}" ${p.k===Number(t.priority)?"selected":""}>${p.l}</option>`).join("")}</select></label>
-      <label class="f">${kind==="repair"?"Статус (складова операция)":"Статус"}<select id="t_status">${statusOpts(kind,t.status||(kind==="repair"?"s0":""),isNew?"":t.replaced)}</select></label>
+      <label class="f">${kind==="repair"?"Статус (складова операция)":"Статус"}<select id="t_status">${statusOpts(kind,t.status||(kind==="repair"?"s0":""),isNew?"":t.replaced,isNew?null:t)}</select></label>
     </div>
     <div class="issue" id="r_op" hidden>
       <div class="g2">
@@ -560,21 +610,23 @@ function bindForm(t){
   // standard
   const fillSites=()=>{$("#t_sites").innerHTML=sitesOf($("#t_comp").value).map(s=>`<option value="${esc(s)}">`).join("")};
   fillSites();
-  comboize($("#t_comp"),"Търсете компания по част от името…");comboize($("#r_comp"),"Търсете клиент по част от името…");
-  $("#t_comp").addEventListener("change",()=>{$("#f_std .t_cinfo").innerHTML=compInfo($("#t_comp").value);fillSites();const s=sitesOf($("#t_comp").value);if(s.length===1&&!$("#t_site").value)$("#t_site").value=s[0]});
+  comboize($("#t_comp"),"Търсете или напишете нова фирма…",{allowNew:true});comboize($("#r_comp"),"Търсете или напишете нова фирма…",{allowNew:true});
+  // При поправка на „За замяна“ – операциите се преизчисляват по новата процедура
+  if(t&&t.kind==="repair")document.querySelectorAll("input[name=t_repl]").forEach(r=>r.addEventListener("change",()=>{const cur=$("#t_status").value;$("#t_status").innerHTML=statusOpts("repair",cur,r.value,t)}));
+  $("#t_comp").addEventListener("change",()=>{$("#t_cphone_box").hidden=!$("#t_comp").value.startsWith("new:");$("#f_std .t_cinfo").innerHTML=compInfo($("#t_comp").value);fillSites();const s=sitesOf($("#t_comp").value);if(s.length===1&&!$("#t_site").value)$("#t_site").value=s[0]});
   const fillCats=()=>{$("#t_cat").innerHTML=catOpts($("#t_dept").value,t&&t.department===$("#t_dept").value?t.category:"")};
   // repair
-  $("#r_comp").addEventListener("change",()=>{const v=$("#r_comp").value;$("#r_cname_box").hidden=!!v;$("#f_rep .t_cinfo").innerHTML=compInfo(v)});
+  $("#r_comp").addEventListener("change",()=>{const v=$("#r_comp").value;$("#r_cname_box").hidden=!!v;$("#r_cphone_box").hidden=!v.startsWith("new:");$("#f_rep .t_cinfo").innerHTML=compInfo(v)});
   // Документ № се пита при всяка нова складова операция; за 3301 е задължителен
   const syncOp=()=>{
     const v=$("#t_status").value,o=REPAIR_STATUSES.find(x=>x.k===v);
-    const show=kindNow()==="repair"&&!!o&&!!o.code&&!!t&&t.status!==v;
+    const show=kindNow()==="repair"&&!!o&&(!!o.code||v==="ssent")&&!!t&&t.status!==v;
     $("#r_op").hidden=!show;
     if(!show)return;
     const must=v==="s3301";
-    $("#r_sdoc_lab").innerHTML=`Документ № за операция ${o.code} (${o.mv})${must?' <span class="req">*</span>':" – по желание"}`;
+    $("#r_sdoc_lab").innerHTML=v==="ssent"?"Товарителница / документ № – по желание":`Документ № за операция ${o.code} (${o.mv})${must?' <span class="req">*</span>':" – по желание"}`;
     $("#r_nsn_box").hidden=!must;
-    const sb=$("#r_sent_box");sb.hidden=v!=="s3400";if(v==="s3400"&&!$("#r_sentdate").value)dset("#r_sentdate",todayStr());
+    const sb=$("#r_sent_box");sb.hidden=v!=="ssent";if(v==="ssent"&&!$("#r_sentdate").value)dset("#r_sentdate",todayStr());
   };
   syncOp();
   const ul=$("#r_unlock"); if(ul) ul.onclick=()=>{$("#r_sum").hidden=true;$("#r_intake").hidden=false;$("#r_product").focus()};
@@ -610,9 +662,9 @@ async function saveTicket(t){
   const body={id:t?t.id:"",department:$("#t_dept").value,priority:Number($("#t_prio").value),status:$("#t_status").value};
   if(kind==="repair"){
     const invD=dval("#r_invdate","Дата по фактура");if(invD===null)return;
-    const sentNew=!$("#r_op").hidden&&$("#t_status").value==="s3400";
+    const sentNew=!$("#r_op").hidden&&$("#t_status").value==="ssent";
     const sentD=sentNew?dval("#r_sentdate","Дата на изпращане"):($("#r_sentedit")?dval("#r_sentedit","Дата на изпращане"):"");if(sentD===null)return;
-    Object.assign(body,{company:$("#r_comp").value,clientName:$("#r_comp").value?"":$("#r_cname").value.trim(),product:$("#r_product").value.trim(),
+    Object.assign(body,{company:$("#r_comp").value,companyPhone:$("#r_comp").value.startsWith("new:")?$("#r_cphone").value.trim():"",clientName:$("#r_comp").value?"":$("#r_cname").value.trim(),product:$("#r_product").value.trim(),
       serial:$("#r_serial").value.trim(),invoiceDate:invD,description:$("#r_fault").value.trim(),replaced:($("input[name=t_repl]:checked")||{}).value||"",
       statusDoc:$("#r_op").hidden?"":$("#r_sdoc").value.trim(),
       sentDate:sentD,newSerial:$("#r_op").hidden?"":$("#r_newserial").value.trim()});
@@ -622,7 +674,7 @@ async function saveTicket(t){
     if(!body.replaced){toast("Изберете дали е за замяна: Да или Не.");return}
     if(body.status==="s3301"&&!$("#r_op").hidden&&!body.statusDoc){toast("Напишете номера на документа за операция 3301.");$("#r_sdoc").focus();return}
   }else{
-    Object.assign(body,{title:$("#t_title").value.trim(),description:$("#t_desc").value.trim(),company:$("#t_comp").value,site:$("#t_site").value.trim(),category:$("#t_cat").value});
+    Object.assign(body,{title:$("#t_title").value.trim(),description:$("#t_desc").value.trim(),company:$("#t_comp").value,companyPhone:$("#t_comp").value.startsWith("new:")?$("#t_cphone").value.trim():"",site:$("#t_site").value.trim(),category:$("#t_cat").value});
     if(!body.title||!body.description){toast("Попълнете заглавие и описание на проблема.");return}
   }
   if(!t){body.assignee=$("#t_asg").value.replace(/^u:/,"")}

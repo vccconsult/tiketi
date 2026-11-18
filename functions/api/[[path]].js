@@ -174,6 +174,23 @@ async function companyId(env, id) {
   if (!r) fail("Избраната компания не съществува.");
   return r.id;
 }
+// Фирма от списъка или нова, написана направо в полето („new:Име“) – добавя се сама в „Компании“
+async function companyOrNew(env, v, phone) {
+  const s = String(v ?? "");
+  if (!s.startsWith("new:")) return companyId(env, s);
+  const name = str(s.slice(4), 160);
+  if (!name) return null;
+  const tel = str(phone, 60), now = nowIso();
+  const ex = await env.DB.prepare("SELECT id, phone FROM companies WHERE name = ? COLLATE NOCASE").bind(name).first();
+  if (ex) {
+    // вече я има – само попълваме телефона, ако липсва
+    if (tel && !ex.phone) { await env.DB.prepare("UPDATE companies SET phone = ?, updated_at = ? WHERE id = ?").bind(tel, now, ex.id).run(); await bumpCfg(env).run(); }
+    return ex.id;
+  }
+  const r = await env.DB.prepare("INSERT INTO companies (name, phone, created_at, updated_at) VALUES (?, ?, ?, ?)").bind(name, tel, now, now).run();
+  await bumpCfg(env).run();
+  return r.meta.last_row_id;
+}
 async function deptId(env, id) {
   if (!id) return null;
   const r = await env.DB.prepare("SELECT id FROM departments WHERE id = ?").bind(parseInt(id, 10) || 0).first();
@@ -309,7 +326,7 @@ const ROUTES = {
   "POST tickets/save": async ({ env, me, body, later, origin }) => {
     const now = nowIso();
     const id = parseInt(body.id, 10) || 0;
-    let comp = await companyId(env, body.company);
+    let comp = await companyOrNew(env, body.company, body.companyPhone);
     const dept = await deptId(env, body.department);
     const old = id ? await env.DB.prepare("SELECT * FROM tickets WHERE id = ?").bind(id).first() : null;
     if (id && !old) fail("Тикетът не съществува.", 404);
@@ -321,12 +338,6 @@ const ROUTES = {
       priority: [1, 2, 3, 4].includes(Number(body.priority)) ? Number(body.priority) : 2,
       client_name: "", product: "", serial: "", replaced: null, new_serial: "", site: "", issued: 0, issue_doc: "",
     };
-    if (kind === "repair" && old && !me.isAdmin) {
-      // Данните от приемането са заключени – само администратор може да ги поправи
-      comp = old.company_id || null;
-      Object.assign(body, { clientName: old.client_name, product: old.product, serial: old.serial, description: old.description, invoiceDate: old.invoice_date,
-        replaced: old.replaced ? "yes" : "no" });
-    }
     if (kind === "repair") {
       Object.assign(f, {
         client_name: comp ? "" : str(body.clientName, 160), product: str(body.product, 120), serial: str(body.serial, 80),
@@ -342,7 +353,7 @@ const ROUTES = {
       const path = REPAIR_PATH[f.replaced ? "yes" : "no"];
       if (!old) f.status = "s0";
       else if (!path.includes(f.status) && f.status !== old.status)
-        fail(f.replaced ? "При замяна операциите са Регистриран → 1300 → 3301 → 3400 → 1401." : "Без замяна операциите са Регистриран → 1300 → 3400 → 1400 → 3300.");
+        fail(f.replaced ? "При замяна операциите са Регистриран → 1300 → 3400 → 3301 → изпращане към Риека → 1401." : "Без замяна операциите са Регистриран → 1300 → 3400 → изпращане към Риека → 1400 → 3300.");
       // Документ № към складовата операция (при смяна на статуса); за 3301 е задължителен
       f.status_doc = old ? str(body.statusDoc, 60) : "";
       f.issued = old ? (old.issued || 0) : 0; f.issue_doc = old ? (old.issue_doc || "") : "";
@@ -379,13 +390,14 @@ const ROUTES = {
     const stm = [];
     // Изпращане към Риека: датата на изпращане (по подразбиране днес); може да се поправя, докато чака връщане
     let sent = old.sent_date || "";
-    if (kind === "repair" && f.status === "s3400" && old.status !== "s3400") sent = dateOnly(body.sentDate) || now.slice(0, 10);
-    else if (kind === "repair" && f.status === "s3400" && dateOnly(body.sentDate) && dateOnly(body.sentDate) !== sent) {
+    // Датата се пуска при физическото изпращане (ssent); 3400 е само зачисляване към Риека
+    if (kind === "repair" && f.status === "ssent" && old.status !== "ssent") sent = dateOnly(body.sentDate) || now.slice(0, 10);
+    else if (kind === "repair" && sent && ["ssent", "s3400", "s3301"].includes(f.status) && dateOnly(body.sentDate) && dateOnly(body.sentDate) !== sent) {
       stm.push(await log(env, id, me.id, "edit", { fields: [{ f: "sent_date", l: "Дата на изпращане към Риека", from: bgDate(sent), to: bgDate(dateOnly(body.sentDate)) }] }, now));
       sent = dateOnly(body.sentDate);
     }
     if (sent !== (old.sent_date || "")) stm.push(env.DB.prepare("UPDATE tickets SET sent_date = ? WHERE id = ?").bind(sent, id));
-    if (old.status !== f.status) stm.push(await log(env, id, me.id, "status", { from: old.status, to: f.status, ...(f.status_doc ? { doc: f.status_doc } : {}), ...(f.status === "s3301" && f.new_serial ? { sn: f.new_serial } : {}), ...(f.status === "s3400" && old.status !== "s3400" ? { sent } : {}) }, now));
+    if (old.status !== f.status) stm.push(await log(env, id, me.id, "status", { from: old.status, to: f.status, ...(f.status_doc ? { doc: f.status_doc } : {}), ...(f.status === "s3301" && f.new_serial ? { sn: f.new_serial } : {}), ...(f.status === "ssent" && old.status !== "ssent" ? { sent } : {}) }, now));
     if (old.priority !== f.priority) stm.push(await log(env, id, me.id, "prio", { from: old.priority, to: f.priority }, now));
     const fields = [];
     const FIELDS = kind === "repair"
